@@ -77,10 +77,11 @@ Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" 
   total. Removing all remaining time completes immediately, even while paused;
   repeated subtraction does not repeat the alert.
 - Sound + flash when the timer completes (volume slider + mute in the widget).
-- The widget opens raised and fully opaque for 3 seconds (without stealing keyboard
-  focus). A pinned, inactive window fades to ~80%; clicking or focusing it makes
-  it opaque. It stays opaque while focused, then fades 2 seconds after focus leaves.
-  Unpinned windows always stay opaque.
+- When another window has focus, the widget is **20% opaque / 80% transparent**, so
+  the window underneath shows through. Clicking or focusing the widget makes it
+  **100% opaque**. This applies both pinned and unpinned. Focus loss updates at
+  the next UI idle cycle, with a 100 ms Windows foreground check as a fallback;
+  there is no two-second fade delay. Startup does not steal keyboard focus.
 - Remembers last state (duration, remaining time, volume, mute, pin, position) between runs.
 - Volume-slider saves are debounced by 250 ms; closing the app flushes pending
   changes. Settings are written to a temporary sibling file and atomically
@@ -204,10 +205,14 @@ To restore a backup, close the app and copy that backup to
 ### Packaged executable smoke test
 
 This opt-in test launches a temporary copy of the executable with isolated
-settings, checks startup opacity and recovery from `1x1`, off-screen, oversized,
+settings, checks 20%/100% opacity while switching real foreground windows and
+recovery from `1x1`, off-screen, oversized,
 or malformed settings, verifies taskbar/Alt+Tab styles, duplicate-launch behavior,
 taskbar-safe bounds and reset backups, then closes it. It does not launch Spotify
 or change your own settings.
+The foreground-switching check temporarily activates test windows where Windows
+permits it; it is skipped when the session's foreground policy blocks activation.
+The inactive-opacity check separately reads the executable's native alpha value.
 
 ```powershell
 $env:POMODORO_TEST_EXE = (Resolve-Path .\dist\PomodoroTimer.exe).Path

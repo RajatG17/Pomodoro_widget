@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import tkinter as tk
 import unittest
 
 
@@ -69,9 +70,15 @@ class ExecutableTests(unittest.TestCase):
         self._check_window({"total": 300, "remaining": 120}, args=["--reset-state"],
                            expected_remaining=1500, expect_backup=True)
 
-    def test_packaged_startup_is_opaque_when_pinned(self):
+    def test_packaged_focus_drives_twenty_percent_and_full_opacity(self):
         self._check_window({"total": 1500, "remaining": 900, "topmost": True},
-                           expect_opaque=True)
+                           check_focus=True)
+
+    def test_packaged_inactive_window_uses_twenty_percent_opacity(self):
+        for pinned in (True, False):
+            with self.subTest(pinned=pinned):
+                self._check_window({"total": 1500, "remaining": 900, "topmost": pinned},
+                                   check_inactive=True)
 
     def test_packaged_offscreen_window_fits_monitor_work_area(self):
         self._check_window({"geometry": "310x340+999999+999999",
@@ -103,8 +110,51 @@ class ExecutableTests(unittest.TestCase):
         self.assertLessEqual(rect.right, info.rcWork.right)
         self.assertLessEqual(rect.bottom, info.rcWork.bottom)
 
+    def _check_focus_opacity(self, hwnd):
+        user32 = ctypes.windll.user32
+        user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+        user32.GetAncestor.restype = wintypes.HWND
+        user32.GetForegroundWindow.restype = wintypes.HWND
+        user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+        user32.GetLayeredWindowAttributes.argtypes = [
+            wintypes.HWND, ctypes.POINTER(wintypes.DWORD),
+            ctypes.POINTER(wintypes.BYTE), ctypes.POINTER(wintypes.DWORD),
+        ]
+        background = tk.Tk()
+        try:
+            background.title("Pomodoro opacity test background")
+            background.geometry("400x300+120+120")
+            background.update()
+            background_hwnd = user32.GetAncestor(background.winfo_id(), 2)
+
+            def expect_foreground_and_alpha(target, expected_alpha):
+                if not user32.SetForegroundWindow(target) and user32.GetForegroundWindow() != target:
+                    self.skipTest("Windows foreground policy blocks automated activation in this session")
+                deadline = time.monotonic() + 1.5  # Must not wait for the old 2s fade.
+                while time.monotonic() < deadline:
+                    background.update()
+                    color, alpha, flags = wintypes.DWORD(), wintypes.BYTE(), wintypes.DWORD()
+                    layered = user32.GetLayeredWindowAttributes(
+                        hwnd, ctypes.byref(color), ctypes.byref(alpha), ctypes.byref(flags))
+                    # A non-layered window is fully opaque.
+                    actual = alpha.value if layered else 255
+                    style = user32.GetWindowLongW(hwnd, -20)
+                    if (user32.GetForegroundWindow() == target and actual == expected_alpha
+                            and style & 0x40000 and not style & 0x80):
+                        return
+                    time.sleep(0.02)
+                self.fail(f"Expected foreground {target} and alpha {expected_alpha}/255; "
+                          f"got foreground {user32.GetForegroundWindow()}, alpha {actual}/255, "
+                          f"extended style {style:#x}")
+
+            expect_foreground_and_alpha(background_hwnd, 51)  # 20% opacity
+            expect_foreground_and_alpha(hwnd, 255)
+            expect_foreground_and_alpha(background_hwnd, 51)
+        finally:
+            background.destroy()
+
     def _check_window(self, state, args=(), expected_remaining=900, expect_backup=False,
-                      expect_opaque=False, check_relaunch=False):
+                      check_focus=False, check_relaunch=False, check_inactive=False):
         with tempfile.TemporaryDirectory() as directory:
             # A unique binary path identifies only our process, never a user's app.
             executable = Path(directory) / "PomodoroTimer.exe"
@@ -149,21 +199,26 @@ class ExecutableTests(unittest.TestCase):
                             subprocess.run(["taskkill", "/PID", str(secondary.pid), "/T", "/F"],
                                            capture_output=True, check=False)
                             secondary.wait(timeout=10)
-                if expect_opaque:
-                    user32 = ctypes.windll.user32
+                if check_focus:
+                    self._check_focus_opacity(hwnd)
+                if check_inactive:
+                    user32.GetForegroundWindow.restype = wintypes.HWND
                     user32.GetLayeredWindowAttributes.argtypes = [
                         wintypes.HWND, ctypes.POINTER(wintypes.DWORD),
                         ctypes.POINTER(wintypes.BYTE), ctypes.POINTER(wintypes.DWORD),
                     ]
-                    color, alpha, flags = wintypes.DWORD(), wintypes.BYTE(), wintypes.DWORD()
-                    layered = user32.GetLayeredWindowAttributes(
-                        hwnd, ctypes.byref(color), ctypes.byref(alpha), ctypes.byref(flags))
-                    if layered:
-                        self.assertEqual(alpha.value, 255, "Startup window should be fully opaque")
+                    if user32.GetForegroundWindow() == hwnd:
+                        self.skipTest("The widget is foreground; inactive-window check needs another window active")
+                    deadline = time.monotonic() + 1.5
+                    while time.monotonic() < deadline:
+                        color, alpha, flags = wintypes.DWORD(), wintypes.BYTE(), wintypes.DWORD()
+                        if user32.GetLayeredWindowAttributes(
+                                hwnd, ctypes.byref(color), ctypes.byref(alpha), ctypes.byref(flags)):
+                            if alpha.value == 51:
+                                break
+                        time.sleep(0.02)
                     else:
-                        user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
-                        self.assertFalse(user32.GetWindowLongW(hwnd, -20) & 0x80000,
-                                         "Could not read opacity of a layered window")
+                        self.fail("Inactive widget did not reach 20% opacity (alpha 51/255)")
                 ctypes.windll.user32.PostMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE
                 self.assertEqual(process.wait(timeout=10), 0)
                 saved = json.loads(state_file.read_text(encoding="utf-8"))

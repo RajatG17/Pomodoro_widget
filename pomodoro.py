@@ -20,13 +20,14 @@ import logging
 import tempfile
 from datetime import datetime
 from pathlib import Path
-from windows_integration import GlobalHotkeys, SingleInstance, enable_taskbar
+from windows_integration import GlobalHotkeys, SingleInstance, enable_taskbar, window_is_foreground
 
 STATE_FILE = os.path.join(os.path.expanduser("~"), ".pomodoro_state.json")
 DEFAULT_GEOMETRY = "290x300+120+120"
 MIN_WINDOW_WIDTH = 290
 MIN_WINDOW_HEIGHT = 300
 MAX_SAVED_DURATION = 365 * 24 * 60 * 60
+INACTIVE_OPACITY = 0.2  # 80% transparent; focused/clicked windows are fully opaque.
 
 VK_MEDIA_PLAY_PAUSE = 0xB3
 VK_MEDIA_NEXT_TRACK = 0xB0
@@ -74,6 +75,7 @@ class PomodoroApp:
         self.volume = self._state.get("volume", 70)
         self.muted = self._state.get("muted", False)
         self._opaque_after = None
+        self._focus_after = None
         self._state_after = None
         self._hotkeys = None
         self._desktop_presence = False
@@ -91,7 +93,7 @@ class PomodoroApp:
         self.pin_btn.config(text="Unpin" if topmost else "Pin")
         self.vol_scale.set(self.volume)
         self.mute_var.set(self.muted)
-        # Do not start faded: give users a chance to find the widget first.
+        # Mapping will synchronize opacity with actual Windows activation.
         self.root.attributes("-alpha", 1.0)
 
         self._update_display()
@@ -286,6 +288,9 @@ class PomodoroApp:
 
     def _on_close(self):
         self.stop_global_hotkeys()
+        if self._focus_after is not None:
+            self.root.after_cancel(self._focus_after)
+            self._focus_after = None
         if self._taskbar_after is not None:
             self.root.after_cancel(self._taskbar_after)
             self._taskbar_after = None
@@ -526,39 +531,46 @@ class PomodoroApp:
         return "break"
 
     def _on_click(self, event=None):
+        self._cancel_fade()
         self._set_alpha(1.0)
-        self._schedule_fade()
 
     def _on_map(self, event):
         if event.widget is self.root:
             # Raise without forcing keyboard focus away from another app.
             self.root.lift()
-            self._set_alpha(1.0)
-            self._schedule_fade(delay=3000)
+            self._apply_alpha()
+            self._queue_taskbar_refresh()
+            if self._focus_after is None:
+                self._focus_after = self.root.after(100, self._poll_focus)
 
     def _cancel_fade(self):
         if self._opaque_after:
             self.root.after_cancel(self._opaque_after)
             self._opaque_after = None
 
-    def _schedule_fade(self, event=None, delay=2000):
+    def _schedule_fade(self, event=None):
         self._cancel_fade()
-        if bool(self.root.attributes("-topmost")):
-            self._opaque_after = self.root.after(delay, self._revert_alpha)
+        # Wait only until focus finishes moving between child controls, not 2s.
+        self._opaque_after = self.root.after_idle(self._revert_alpha)
 
     def _has_focus(self):
-        focused = self.root.focus_displayof()
-        return focused is not None and focused.winfo_toplevel() is self.root
+        return window_is_foreground(self.root)
+
+    def _poll_focus(self):
+        self._focus_after = None
+        if self.root.winfo_ismapped():
+            # Override-redirect windows can miss Tk FocusOut notifications.
+            self._apply_alpha()
+            self._focus_after = self.root.after(100, self._poll_focus)
 
     def _revert_alpha(self):
         self._opaque_after = None
         self._apply_alpha()
 
     def _apply_alpha(self):
-        if bool(self.root.attributes("-topmost")) and not self._has_focus():
-            self._set_alpha(0.8)
-        else:
-            self._set_alpha(1.0)
+        alpha = 1.0 if self._has_focus() else INACTIVE_OPACITY
+        if abs(float(self.root.attributes("-alpha")) - alpha) > 0.001:
+            self._set_alpha(alpha)
 
     def toggle_topmost(self):
         cur = bool(self.root.attributes("-topmost"))

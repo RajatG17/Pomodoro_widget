@@ -19,6 +19,25 @@ HOTKEYS = (
     ("Show widget", 0x50, "show"),
 )
 
+_foreground_user32 = None
+
+
+def window_is_foreground(root, user32=None):
+    """Use actual Windows activation, not Tk's potentially stale focus cache."""
+    global _foreground_user32
+    if user32 is None:
+        if _foreground_user32 is None:
+            _foreground_user32 = ctypes.WinDLL("user32", use_last_error=True)
+        user32 = _foreground_user32
+    user32.GetForegroundWindow.restype = wintypes.HWND
+    user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+    user32.GetAncestor.restype = wintypes.HWND
+    foreground = user32.GetForegroundWindow()
+    if not foreground:
+        return False
+    own_window = user32.GetAncestor(root.winfo_id(), 2)
+    return bool(own_window and user32.GetAncestor(foreground, 2) == own_window)
+
 
 class SingleInstance:
     """Per-session, per-settings-file guard with an auto-reset 'show' event."""

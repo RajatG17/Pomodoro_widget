@@ -233,51 +233,68 @@ class PomodoroTests(unittest.TestCase):
 
     def test_translucent_when_pinned(self):
         self.app.root.attributes("-topmost", True)
-        self.app._apply_alpha()
-        self.assertAlmostEqual(float(self.app.root.attributes("-alpha")), 0.8, places=2)
+        with patch.object(self.app, "_has_focus", return_value=False):
+            self.app._apply_alpha()
+        self.assertAlmostEqual(float(self.app.root.attributes("-alpha")), 0.2, places=2)
 
-    def test_opaque_when_unpinned(self):
+    def test_inactive_unpinned_window_is_also_translucent(self):
         self.app.root.attributes("-topmost", False)
-        self.app._apply_alpha()
-        self.assertAlmostEqual(float(self.app.root.attributes("-alpha")), 1.0, places=2)
+        with patch.object(self.app, "_has_focus", return_value=False):
+            self.app._apply_alpha()
+        self.assertAlmostEqual(float(self.app.root.attributes("-alpha")), 0.2, places=2)
 
-    def test_startup_is_opaque_even_when_pinned(self):
+    def test_focus_loss_fades_at_idle_without_waiting_two_seconds(self):
+        self.app._on_click()
+        with patch.object(self.app, "_has_focus", return_value=False):
+            self.app._schedule_fade()
+            self.root.update_idletasks()
+        self.assertAlmostEqual(float(self.root.attributes("-alpha")), 0.2, places=2)
+
+    def test_moving_focus_between_child_controls_does_not_fade(self):
+        self.app._on_click()
+        with patch.object(self.app, "_has_focus", return_value=True):
+            self.app._schedule_fade()
+            self.root.update_idletasks()
         self.assertAlmostEqual(float(self.root.attributes("-alpha")), 1.0, places=2)
 
-    def test_mapping_window_raises_it_and_starts_visibility_grace_period(self):
-        with patch.object(self.root, "lift") as lift:
+    def test_unmapped_initialization_defaults_to_opaque(self):
+        self.assertAlmostEqual(float(self.root.attributes("-alpha")), 1.0, places=2)
+
+    def test_mapping_inactive_window_raises_it_and_starts_focus_monitor(self):
+        with patch.object(self.root, "lift") as lift, \
+                patch.object(self.app, "_has_focus", return_value=False):
             self.root.deiconify()
             self.root.update()
         lift.assert_called()
-        self.assertAlmostEqual(float(self.root.attributes("-alpha")), 1.0, places=2)
-        self.assertIsNotNone(self.app._opaque_after)
+        self.assertAlmostEqual(float(self.root.attributes("-alpha")), 0.2, places=2)
+        self.assertIsNotNone(self.app._focus_after)
 
     def test_opacity_timeout_does_not_fade_focused_window(self):
         self.app._on_click()
-        with patch.object(self.root, "focus_displayof", return_value=self.app.start_btn):
+        with patch.object(self.app, "_has_focus", return_value=True):
             self.app._revert_alpha()
         self.assertAlmostEqual(float(self.root.attributes("-alpha")), 1.0, places=2)
 
     def test_opacity_timeout_fades_inactive_pinned_window(self):
         self.app._on_click()
-        with patch.object(self.root, "focus_displayof", return_value=None):
+        with patch.object(self.app, "_has_focus", return_value=False):
             self.app._revert_alpha()
-        self.assertAlmostEqual(float(self.root.attributes("-alpha")), 0.8, places=2)
+        self.assertAlmostEqual(float(self.root.attributes("-alpha")), 0.2, places=2)
 
     def test_clicking_child_widget_makes_window_opaque(self):
         self.root.deiconify()
         self.root.update()
-        self.root.attributes("-alpha", 0.8)
+        self.root.attributes("-alpha", 0.2)
         self.app.time_label.event_generate("<Button-1>")
         self.assertAlmostEqual(float(self.root.attributes("-alpha")), 1.0, places=2)
 
     def test_focus_in_makes_window_opaque(self):
-        self.root.attributes("-alpha", 0.8)
+        self.root.attributes("-alpha", 0.2)
         self.root.event_generate("<FocusIn>")
         self.assertAlmostEqual(float(self.root.attributes("-alpha")), 1.0, places=2)
 
     def test_unpin_cancels_pending_fade(self):
-        self.app._on_click()
+        self.app._schedule_fade()
         job = self.app._opaque_after
         self.app.toggle_topmost()
         self.assertIsNone(self.app._opaque_after)
@@ -285,12 +302,40 @@ class PomodoroTests(unittest.TestCase):
         self.assertAlmostEqual(float(self.root.attributes("-alpha")), 1.0, places=2)
 
     def test_focus_out_replaces_pending_fade_timer(self):
-        self.app._on_click()
+        self.app._schedule_fade()
         original_job = self.app._opaque_after
         self.root.event_generate("<FocusOut>")
         self.assertIsNotNone(self.app._opaque_after)
         self.assertNotEqual(original_job, self.app._opaque_after)
         self.assertNotIn(original_job, self.root.tk.call("after", "info"))
+
+    def test_stale_tk_focus_does_not_override_windows_foreground_state(self):
+        with patch.object(self.root, "focus_displayof", return_value=self.app.start_btn), \
+                patch.object(pomodoro, "window_is_foreground", return_value=False):
+            self.app._apply_alpha()
+        self.assertAlmostEqual(float(self.root.attributes("-alpha")), 0.2, places=2)
+
+    def test_poll_repairs_missed_focus_out_without_rewriting_unchanged_alpha(self):
+        self.root.deiconify()
+        self.root.update()
+        self.root.after_cancel(self.app._focus_after)
+        self.app._on_click()
+        with patch.object(self.app, "_has_focus", return_value=False):
+            self.app._poll_focus()
+        self.assertAlmostEqual(float(self.root.attributes("-alpha")), 0.2, places=2)
+        with patch.object(self.app, "_has_focus", return_value=False), \
+                patch.object(self.app, "_set_alpha") as set_alpha:
+            self.app._apply_alpha()
+        set_alpha.assert_not_called()
+
+    def test_close_cancels_focus_monitor(self):
+        self.root.deiconify()
+        self.root.update()
+        job = self.app._focus_after
+        with patch.object(self.root, "destroy"):
+            self.app._on_close()
+        self.assertIsNone(self.app._focus_after)
+        self.assertNotIn(job, self.root.tk.call("after", "info"))
 
     def _app_from_state(self, state, scaling=None):
         self.state_file.write_text(json.dumps(state), encoding="utf-8")
@@ -397,7 +442,7 @@ class PomodoroTests(unittest.TestCase):
         self.root.update()
         self.app.remaining = 123
         self.root.geometry("+99999+99999")
-        self.root.attributes("-alpha", 0.8)
+        self.root.attributes("-alpha", 0.2)
         self.root.event_generate("<Escape>")
         self.root.update()
         self._assert_window_in_work_area(self.app)
@@ -566,7 +611,8 @@ class PomodoroTests(unittest.TestCase):
 
     def test_show_existing_window_preserves_timer_and_reveals_widget(self):
         self.app.remaining = 123
-        with patch.object(self.root, "focus_force") as focus:
+        with patch.object(self.root, "focus_force") as focus, \
+                patch.object(self.app, "_has_focus", return_value=True):
             self.app.show_window()
             self.root.update()
         self.assertTrue(self.root.winfo_ismapped())
@@ -591,7 +637,7 @@ class PomodoroTests(unittest.TestCase):
             self.assertFalse(style & 0x80)
 
         check_style()
-        with patch.object(self.root, "focus_displayof", return_value=None):
+        with patch.object(self.app, "_has_focus", return_value=False):
             self.app._apply_alpha()
         check_style()
         self.app.toggle_topmost()

@@ -3,7 +3,7 @@ import os
 import ctypes
 from unittest.mock import Mock, MagicMock
 
-from windows_integration import GlobalHotkeys, HOTKEYS, SingleInstance, enable_taskbar
+from windows_integration import GlobalHotkeys, HOTKEYS, SingleInstance, enable_taskbar, window_is_foreground
 from unittest.mock import patch
 
 
@@ -67,6 +67,16 @@ class GlobalHotkeyTests(unittest.TestCase):
 
 
 class InstanceAndTaskbarTests(unittest.TestCase):
+    def test_windows_foreground_identifies_native_tk_wrapper_and_children(self):
+        root, user32 = Mock(), MagicMock()
+        root.winfo_id.return_value = 100
+        user32.GetAncestor.side_effect = lambda hwnd, flag: 42 if hwnd in (100, 101, 42) else 99
+        for foreground, expected in ((42, True), (101, True), (200, False), (0, False)):
+            with self.subTest(foreground=foreground):
+                user32.GetForegroundWindow.return_value = foreground
+                self.assertEqual(window_is_foreground(root, user32), expected)
+        root.focus_displayof.assert_not_called()
+
     def _instance(self, already_exists=False):
         kernel = MagicMock()
         kernel.CreateMutexW.return_value = 11

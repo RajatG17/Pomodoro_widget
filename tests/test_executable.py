@@ -73,6 +73,32 @@ class ExecutableTests(unittest.TestCase):
         self._check_window({"total": 1500, "remaining": 900, "topmost": True},
                            expect_opaque=True)
 
+    def test_packaged_offscreen_window_fits_monitor_work_area(self):
+        self._check_window({"geometry": "310x340+999999+999999",
+                            "total": 1500, "remaining": 900})
+
+    def test_packaged_oversized_window_fits_monitor_work_area(self):
+        self._check_window({"geometry": "99999x99999+0+0",
+                            "total": 1500, "remaining": 900})
+
+    def _assert_inside_monitor_work_area(self, hwnd, rect):
+        class MonitorInfo(ctypes.Structure):
+            _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT),
+                        ("rcWork", wintypes.RECT), ("dwFlags", wintypes.DWORD)]
+
+        user32 = ctypes.windll.user32
+        user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+        user32.MonitorFromWindow.restype = wintypes.HANDLE
+        user32.GetMonitorInfoW.argtypes = [wintypes.HANDLE, ctypes.POINTER(MonitorInfo)]
+        monitor = user32.MonitorFromWindow(hwnd, 2)
+        info = MonitorInfo()
+        info.cbSize = ctypes.sizeof(info)
+        self.assertTrue(user32.GetMonitorInfoW(monitor, ctypes.byref(info)))
+        self.assertGreaterEqual(rect.left, info.rcWork.left)
+        self.assertGreaterEqual(rect.top, info.rcWork.top)
+        self.assertLessEqual(rect.right, info.rcWork.right)
+        self.assertLessEqual(rect.bottom, info.rcWork.bottom)
+
     def _check_window(self, state, args=(), expected_remaining=900, expect_backup=False,
                       expect_opaque=False):
         with tempfile.TemporaryDirectory() as directory:
@@ -99,6 +125,7 @@ class ExecutableTests(unittest.TestCase):
                     self.fail("Packaged app did not create a visible, usable window within 20s")
                 self.assertGreaterEqual(rect.right - rect.left, 290)
                 self.assertGreaterEqual(rect.bottom - rect.top, 300)
+                self._assert_inside_monitor_work_area(hwnd, rect)
                 if expect_opaque:
                     user32 = ctypes.windll.user32
                     user32.GetLayeredWindowAttributes.argtypes = [

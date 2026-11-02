@@ -45,6 +45,11 @@ def backup_saved_state():
 class PomodoroApp:
     def __init__(self, root):
         self.root = root
+        was_withdrawn = self.root.state() == "withdrawn"
+        self.root.withdraw()  # Measure/layout before showing a half-built window.
+        self._initializing = True
+        self._minimum_width = MIN_WINDOW_WIDTH
+        self._minimum_height = MIN_WINDOW_HEIGHT
         self.root.title("Pomodoro")
         self.root.overrideredirect(True)          # borderless widget
         self.root.attributes("-topmost", True)    # stay on top of all windows
@@ -68,13 +73,14 @@ class PomodoroApp:
         self._opaque_after = None
 
         self._build_ui()
+        self.root.update_idletasks()
+        self._minimum_width = max(MIN_WINDOW_WIDTH, self.root.winfo_reqwidth())
+        self._minimum_height = max(MIN_WINDOW_HEIGHT, self.root.winfo_reqheight())
 
         # apply persisted topmost / geometry
         topmost = self._state.get("topmost", True)
         self.root.attributes("-topmost", topmost)
-        self._last_geometry = (self._validated_geometry(self._state.get("geometry"))
-                               or self._default_geometry())
-        self.root.geometry(self._last_geometry)
+        self._set_window_geometry(self._fit_geometry(self._state.get("geometry")))
         self.pin_btn.config(text="Unpin" if topmost else "Pin")
         self.vol_scale.set(self.volume)
         self.mute_var.set(self.muted)
@@ -93,6 +99,7 @@ class PomodoroApp:
         self.root.bind("<KP_Add>", lambda e: self.add_time(600))
         self.root.bind("<minus>", lambda e: self.add_time(-600))
         self.root.bind("<KP_Subtract>", lambda e: self.add_time(-600))
+        self.root.bind("<Escape>", self._recover_window)
 
         # translucency on click
         self.root.bind("<Button-1>", self._on_click)
@@ -100,26 +107,39 @@ class PomodoroApp:
         self.root.bind("<FocusOut>", self._schedule_fade, add="+")
         self.root.bind("<Map>", self._on_map, add="+")
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self._initializing = False
+        if not was_withdrawn:
+            self.root.deiconify()
 
     # ---------- state persistence ----------
     def _screen_rects(self):
-        """Enumerate monitors so disconnected displays cannot hide the widget."""
+        """Return monitor work areas, excluding the taskbar and docked toolbars."""
         rects = []
+
+        class MonitorInfo(ctypes.Structure):
+            _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT),
+                        ("rcWork", wintypes.RECT), ("dwFlags", wintypes.DWORD)]
+
+        get_info = ctypes.windll.user32.GetMonitorInfoW
+        get_info.argtypes = [wintypes.HANDLE, ctypes.POINTER(MonitorInfo)]
         callback_type = ctypes.WINFUNCTYPE(
             wintypes.BOOL, wintypes.HANDLE, wintypes.HDC,
             ctypes.POINTER(wintypes.RECT), wintypes.LPARAM,
         )
 
         def collect(monitor, dc, rect, data):
-            r = rect.contents
+            info = MonitorInfo()
+            info.cbSize = ctypes.sizeof(info)
+            r = info.rcWork if get_info(monitor, ctypes.byref(info)) else rect.contents
             rects.append((r.left, r.top, r.right, r.bottom))
             return True
 
-        if ctypes.windll.user32.EnumDisplayMonitors(None, None, callback_type(collect), 0):
+        if (ctypes.windll.user32.EnumDisplayMonitors(None, None, callback_type(collect), 0)
+                and rects):
             return rects
         return [(0, 0, self.root.winfo_screenwidth(), self.root.winfo_screenheight())]
 
-    def _validated_geometry(self, value):
+    def _geometry_parts(self, value):
         if not isinstance(value, str) or len(value) > 100:
             return None
         match = re.fullmatch(r"(\d+)x(\d+)([+-]\d+)([+-]\d+)", value)
@@ -135,18 +155,50 @@ class PomodoroApp:
             x += self.root.winfo_screenwidth() - width
         if y_text.startswith("-"):
             y += self.root.winfo_screenheight() - height
+        return width, height, x, y
+
+    def _format_geometry(self, width, height, x, y):
+        # Encode physical negative-monitor coordinates using Tk's edge offsets.
+        x_offset = x if x >= 0 else x - self.root.winfo_screenwidth() + width
+        y_offset = y if y >= 0 else y - self.root.winfo_screenheight() + height
+        return f"{width}x{height}{x_offset:+d}{y_offset:+d}"
+
+    def _validated_geometry(self, value):
+        parts = self._geometry_parts(value)
+        if parts is None:
+            return None
+        width, height, x, y = parts
+        if width < self._minimum_width or height < self._minimum_height:
+            return None
         if any(left <= x and top <= y and x + width <= right and y + height <= bottom
                for left, top, right, bottom in self._screen_rects()):
             return value
         return None
 
     def _default_geometry(self):
-        # Keep the whole window visible, even on smaller primary displays.
-        width = self.root.winfo_screenwidth()
-        height = self.root.winfo_screenheight()
-        x = max(0, min(120, width - MIN_WINDOW_WIDTH))
-        y = max(0, min(120, height - MIN_WINDOW_HEIGHT))
-        return f"{MIN_WINDOW_WIDTH}x{MIN_WINDOW_HEIGHT}+{x}+{y}"
+        return self._fit_geometry(DEFAULT_GEOMETRY)
+
+    def _fit_geometry(self, value):
+        """Fit contents on the nearest usable monitor, preserving position if possible."""
+        parts = self._geometry_parts(value) or self._geometry_parts(DEFAULT_GEOMETRY)
+        width, height, x, y = parts
+        areas = self._screen_rects()
+        left, top, right, bottom = min(
+            areas, key=lambda r: max(r[0] - x, 0, x - r[2]) ** 2
+            + max(r[1] - y, 0, y - r[3]) ** 2,
+        )
+        width = min(max(width, self._minimum_width), right - left)
+        height = min(max(height, self._minimum_height), bottom - top)
+        x = max(left, min(x, right - width))
+        y = max(top, min(y, bottom - height))
+        return self._format_geometry(width, height, x, y)
+
+    def _set_window_geometry(self, geometry):
+        # On very small displays, prioritize keeping the header/close button reachable.
+        width, height = map(int, re.match(r"(\d+)x(\d+)", geometry).groups())
+        self.root.minsize(min(width, self._minimum_width), min(height, self._minimum_height))
+        self.root.geometry(geometry)
+        self._last_geometry = geometry
 
     @staticmethod
     def _load_state():
@@ -179,6 +231,8 @@ class PomodoroApp:
         }
 
     def _save_state(self):
+        if self._initializing:
+            return
         # Before mapping (or while withdrawn), Tk can report a 1x1 window.
         # Preserve the last known good size/position instead of saving that.
         if self.root.winfo_ismapped():
@@ -302,12 +356,14 @@ class PomodoroApp:
 
         mf = tk.Frame(music_tab, bg="#1e1e2e")
         mf.pack(pady=4)
-        for txt, cmd in (("⏮ Prev", self._media_prev),
-                         ("⏯ Play/Pause", self._media_playpause),
-                         ("⏭ Next", self._media_next),
-                         ("⏹ Stop", self._media_stop)):
+        media_controls = (("⏮ Prev", self._media_prev),
+                          ("⏯ Play/Pause", self._media_playpause),
+                          ("⏭ Next", self._media_next),
+                          ("⏹ Stop", self._media_stop))
+        for index, (txt, cmd) in enumerate(media_controls):
             tk.Button(mf, text=txt, command=cmd, bg="#45475a", fg="#cdd6f4",
-                     bd=0, font=("Segoe UI", 9), width=12).pack(side="left", padx=2)
+                     bd=0, font=("Segoe UI", 9), width=12).grid(
+                         row=index // 2, column=index % 2, padx=2, pady=2, sticky="ew")
 
         openf = tk.Frame(music_tab, bg="#1e1e2e")
         openf.pack(pady=8, fill="x", padx=8)
@@ -322,7 +378,7 @@ class PomodoroApp:
         tk.Button(music_tab, text="Launch Spotify app", command=self._launch_spotify,
                  bg="#45475a", fg="#cdd6f4", bd=0, font=("Segoe UI", 9)).pack(pady=4)
 
-        tk.Label(music_tab, text="Media keys control the active player (Spotify).",
+        tk.Label(music_tab, text="Media keys control the active player\n(Spotify or another media app).",
                 fg="#6c7086", bg="#1e1e2e", font=("Segoe UI", 8)).pack(pady=(8, 4))
 
     # ---------- drag ----------
@@ -333,7 +389,16 @@ class PomodoroApp:
     def do_drag(self, event):
         x = self.root.winfo_x() + event.x - self.drag_x
         y = self.root.winfo_y() + event.y - self.drag_y
-        self.root.geometry(f"+{x}+{y}")
+        geometry = self._format_geometry(self.root.winfo_width(), self.root.winfo_height(), x, y)
+        self._set_window_geometry(self._fit_geometry(geometry))
+
+    def _recover_window(self, event=None):
+        self._set_window_geometry(self._default_geometry())
+        self.root.update_idletasks()
+        self.root.lift()
+        self._on_click()
+        self._save_state()
+        return "break"
 
     def _on_click(self, event=None):
         self.root.attributes("-alpha", 1.0)

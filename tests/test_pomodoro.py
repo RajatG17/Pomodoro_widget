@@ -156,12 +156,117 @@ class PomodoroTests(unittest.TestCase):
         self.assertNotEqual(original_job, self.app._opaque_after)
         self.assertNotIn(original_job, self.root.tk.call("after", "info"))
 
-    def _app_from_state(self, state):
+    def _app_from_state(self, state, scaling=None):
         self.state_file.write_text(json.dumps(state), encoding="utf-8")
         root = tk.Tk()
         self.addCleanup(self._destroy_root, root)
         root.withdraw()
+        if scaling is not None:
+            original = root.tk.call("tk", "scaling")
+            root.tk.call("tk", "scaling", scaling)
+            self.addCleanup(root.tk.call, "tk", "scaling", original)
         return pomodoro.PomodoroApp(root)
+
+    def _assert_controls_fit(self, app):
+        def check(widget):
+            children = widget.winfo_children()
+            if not children:
+                self.assertTrue(widget.winfo_ismapped(), f"Hidden control: {widget}")
+                x = widget.winfo_rootx() - app.root.winfo_rootx()
+                y = widget.winfo_rooty() - app.root.winfo_rooty()
+                self.assertGreaterEqual(x, 0, str(widget))
+                self.assertGreaterEqual(y, 0, str(widget))
+                self.assertLessEqual(x + widget.winfo_width(), app.root.winfo_width(), str(widget))
+                self.assertLessEqual(y + widget.winfo_height(), app.root.winfo_height(), str(widget))
+                if isinstance(widget, (tk.Button, tk.Checkbutton, tk.Scale, tk.Label)):
+                    self.assertGreaterEqual(widget.winfo_width(), widget.winfo_reqwidth(), str(widget))
+                    self.assertGreaterEqual(widget.winfo_height(), widget.winfo_reqheight(), str(widget))
+            for child in children:
+                check(child)
+
+        app.root.deiconify()
+        app.root.update()
+        for child in app.root.winfo_children():
+            if child is not app.notebook:
+                check(child)
+        for tab in app.notebook.tabs():
+            app.notebook.select(tab)
+            app.root.update()
+            check(app.root.nametowidget(tab))
+
+    def test_all_timer_and_music_controls_fit_default_window(self):
+        self._assert_controls_fit(self.app)
+
+    def test_all_controls_fit_at_larger_display_scaling(self):
+        app = self._app_from_state({"geometry": "290x300+120+120"}, scaling=2.0)
+        self._assert_controls_fit(app)
+
+    def test_minimum_size_prevents_clipping_after_forced_resize(self):
+        self.root.deiconify()
+        self.root.geometry("1x1+120+120")
+        self.root.update()
+        self.assertGreaterEqual(self.root.winfo_width(), self.app._minimum_width)
+        self.assertGreaterEqual(self.root.winfo_height(), self.app._minimum_height)
+        self._assert_controls_fit(self.app)
+
+    def test_monitor_bounds_exclude_taskbar_and_docked_toolbars(self):
+        def monitor_info(monitor, pointer):
+            info = pointer._obj
+            info.rcWork.left, info.rcWork.top = 40, 20
+            info.rcWork.right, info.rcWork.bottom = 1880, 1040
+            return True
+
+        with patch.object(pomodoro.ctypes.windll.user32, "GetMonitorInfoW",
+                          side_effect=monitor_info):
+            areas = self.app._screen_rects()
+        self.assertTrue(areas)
+        self.assertTrue(all(area == (40, 20, 1880, 1040) for area in areas))
+
+    def test_window_is_fitted_inside_usable_work_area(self):
+        with patch.object(self.app, "_screen_rects", return_value=[(40, 20, 800, 600)]):
+            fitted = self.app._fit_geometry("310x340+750+550")
+            self.assertEqual(self.app._geometry_parts(fitted), (310, 340, 490, 260))
+            self.assertIsNotNone(self.app._validated_geometry(fitted))
+
+    def test_negative_monitor_coordinates_roundtrip_without_jumping(self):
+        geometry = self.app._format_geometry(310, 340, -1000, 120)
+        with patch.object(self.app, "_screen_rects", return_value=[(-1280, 0, 0, 1024)]):
+            fitted = self.app._fit_geometry(geometry)
+            self.assertEqual(self.app._geometry_parts(fitted), (310, 340, -1000, 120))
+            self.assertEqual(self.app._validated_geometry(fitted), fitted)
+
+    def test_small_work_area_keeps_window_header_reachable(self):
+        with patch.object(self.app, "_screen_rects", return_value=[(0, 0, 280, 250)]):
+            fitted = self.app._fit_geometry("310x340+120+120")
+            self.app._set_window_geometry(fitted)
+            self.root.deiconify()
+            self.root.update()
+            self._assert_window_in_work_area(self.app)
+            header = self.root.winfo_children()[0]
+            for control in header.winfo_children():
+                self.assertTrue(control.winfo_ismapped())
+
+    def test_dragging_cannot_lose_window_offscreen(self):
+        self.root.deiconify()
+        self.root.update()
+        event = type("DragEvent", (), {"x": 100000, "y": 100000})()
+        self.app.do_drag(event)
+        self.root.update_idletasks()
+        self._assert_window_in_work_area(self.app)
+
+    def test_escape_recovers_window_without_resetting_timer(self):
+        self.root.deiconify()
+        self.root.update()
+        self.root.focus_force()
+        self.root.update()
+        self.app.remaining = 123
+        self.root.geometry("+99999+99999")
+        self.root.attributes("-alpha", 0.8)
+        self.root.event_generate("<Escape>")
+        self.root.update()
+        self._assert_window_in_work_area(self.app)
+        self.assertEqual(self.app.remaining, 123)
+        self.assertAlmostEqual(float(self.root.attributes("-alpha")), 1.0, places=2)
 
     def test_tiny_saved_geometry_recovers_visible_window(self):
         app = self._app_from_state({"geometry": "1x1+120+120"})
@@ -174,8 +279,15 @@ class PomodoroTests(unittest.TestCase):
         app = self._app_from_state({"geometry": "290x300+999999+999999"})
         app.root.deiconify()
         app.root.update_idletasks()
-        self.assertLess(app.root.winfo_x(), app.root.winfo_screenwidth())
-        self.assertLess(app.root.winfo_y(), app.root.winfo_screenheight())
+        self._assert_window_in_work_area(app)
+
+    def _assert_window_in_work_area(self, app):
+        x, y = app.root.winfo_x(), app.root.winfo_y()
+        width, height = app.root.winfo_width(), app.root.winfo_height()
+        self.assertTrue(any(left <= x and top <= y
+                            and x + width <= right and y + height <= bottom
+                            for left, top, right, bottom in app._screen_rects()),
+                        f"Window outside monitor work areas: {(x, y, width, height)}")
 
     def test_hidden_window_save_keeps_last_valid_geometry(self):
         app = self._app_from_state({"geometry": "310x340+140+140"})
@@ -204,16 +316,16 @@ class PomodoroTests(unittest.TestCase):
     def test_geometry_on_connected_secondary_monitor_is_preserved(self):
         monitors = [(0, 0, 1920, 1080), (1920, 0, 3840, 1080)]
         with patch.object(self.app, "_screen_rects", return_value=monitors):
-            self.assertEqual(self.app._validated_geometry("290x300+2000+120"),
-                             "290x300+2000+120")
+            self.assertEqual(self.app._validated_geometry("310x340+2000+120"),
+                             "310x340+2000+120")
 
     def test_geometry_on_disconnected_monitor_is_rejected(self):
         with patch.object(self.app, "_screen_rects", return_value=[(0, 0, 1920, 1080)]):
             self.assertIsNone(self.app._validated_geometry("290x300+2000+120"))
 
     def test_right_bottom_relative_geometry_remains_supported(self):
-        self.assertEqual(self.app._validated_geometry("290x300-10-10"),
-                         "290x300-10-10")
+        self.assertEqual(self.app._validated_geometry("310x340-80-80"),
+                         "310x340-80-80")
 
     def test_nonobject_saved_state_uses_defaults(self):
         for state in ([], None, "settings", 42):

@@ -63,6 +63,9 @@ Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" 
 
 - Stays on top of all windows (toggle with the "Pin"/"Unpin" button).
 - Borderless, draggable widget.
+- Window size fits both tabs at the current display scaling; music controls use
+  two rows so all four buttons remain accessible. Restoring or dragging the widget
+  keeps it within a monitor's usable area, clear of the taskbar.
 - Start / Pause / Reset.
 - Extend the running timer: `+1m`, `+5m`, `+10m` (or `+`/`-` keys).
 - Quick presets: 25m / 15m / 5m.
@@ -80,6 +83,8 @@ Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" 
 - `Space` - Start/Pause
 - `R` - Reset
 - `+` / `-` - Add/remove 10 minutes
+- `Esc` - Restore the window's default size/position and make it opaque, without
+  resetting the timer or audio settings (while the widget has keyboard focus).
 
 ## Testing
 
@@ -102,9 +107,14 @@ settings. Media playback is not triggered by the tests.
 
 Saved settings live in `%USERPROFILE%\.pomodoro_state.json`. Older versions
 could save an invisible `1x1` window, especially after running the old tests.
-The fixed version automatically rejects tiny, malformed, oversized, and off-screen
-window geometry and opens at a visible default position. Valid timer and audio
+The fixed version automatically repairs tiny, malformed, oversized, and off-screen
+window geometry and opens within a usable monitor area. Valid timer and audio
 settings are kept; hidden windows no longer overwrite the last valid geometry.
+Older saved sizes are expanded when needed to fit the controls. The minimum size
+is measured from the UI, rather than fixed at 290×300. Monitor work areas exclude
+taskbars and docked toolbars; negative-coordinate secondary monitors are supported.
+On unusually small work areas that cannot fit the entire UI, the window is capped
+to the available space to keep the header and close button reachable.
 Invalid JSON, non-object settings, and invalid field types no longer prevent
 startup. Invalid fields fall back to defaults; remaining time and volume are
 bounded to valid ranges. Saved durations outside 1 second–1 year use the default
@@ -132,9 +142,9 @@ To restore a backup, close the app and copy that backup to
 ### Packaged executable smoke test
 
 This opt-in test launches a temporary copy of the executable with isolated
-settings, checks that a visible, usable window appears from `1x1` saved geometry
-or malformed settings, verifies reset backups, then closes it. It does not launch
-Spotify or change your own settings.
+settings, checks startup opacity and recovery from `1x1`, off-screen, oversized,
+or malformed settings, verifies taskbar-safe bounds and reset backups, then closes
+it. It does not launch Spotify or change your own settings.
 
 ```powershell
 $env:POMODORO_TEST_EXE = (Resolve-Path .\dist\PomodoroTimer.exe).Path

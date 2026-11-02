@@ -1,0 +1,98 @@
+"""Opt-in smoke test of the actual packaged Windows window, not just its process."""
+import ctypes
+from ctypes import wintypes
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+import time
+import unittest
+
+
+@unittest.skipUnless(os.name == "nt" and os.environ.get("POMODORO_TEST_EXE"),
+                     "Set POMODORO_TEST_EXE to the rebuilt executable to test packaging")
+class ExecutableTests(unittest.TestCase):
+    def _find_window(self, executable):
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+        user32.IsWindowVisible.argtypes = [wintypes.HWND]
+        user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+        user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+        user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT,
+                                      wintypes.WPARAM, wintypes.LPARAM]
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.QueryFullProcessImageNameW.argtypes = [
+            wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+            ctypes.POINTER(wintypes.DWORD),
+        ]
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        found = []
+        callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+        def inspect(hwnd, data):
+            title = ctypes.create_unicode_buffer(256)
+            user32.GetWindowTextW(hwnd, title, len(title))
+            if title.value != "Pomodoro" or not user32.IsWindowVisible(hwnd):
+                return True
+            pid = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            process = kernel32.OpenProcess(0x1000, False, pid.value)
+            if process:
+                try:
+                    path = ctypes.create_unicode_buffer(32768)
+                    length = wintypes.DWORD(len(path))
+                    if kernel32.QueryFullProcessImageNameW(process, 0, path, ctypes.byref(length)):
+                        if os.path.normcase(path.value) == os.path.normcase(str(executable)):
+                            found.append(hwnd)
+                finally:
+                    kernel32.CloseHandle(process)
+            return True
+
+        user32.EnumWindows(callback_type(inspect), 0)
+        return found[0] if found else None
+
+    def test_packaged_app_recovers_tiny_geometry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            # A unique binary path identifies only our process, never a user's app.
+            executable = Path(directory) / "PomodoroTimer.exe"
+            shutil.copy2(Path(os.environ["POMODORO_TEST_EXE"]).resolve(), executable)
+            state_file = Path(directory) / ".pomodoro_state.json"
+            state_file.write_text(json.dumps({"geometry": "1x1+120+120",
+                                              "total": 1500, "remaining": 900}),
+                                  encoding="utf-8")
+            env = dict(os.environ, USERPROFILE=directory)
+            process = subprocess.Popen([str(executable)], env=env)
+            try:
+                deadline = time.monotonic() + 20
+                hwnd = None
+                while time.monotonic() < deadline and process.poll() is None:
+                    hwnd = self._find_window(executable)
+                    if hwnd:
+                        rect = wintypes.RECT()
+                        ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
+                        if rect.right - rect.left >= 290 and rect.bottom - rect.top >= 300:
+                            break
+                    time.sleep(0.1)
+                else:
+                    self.fail("Packaged app did not create a visible, usable window within 20s")
+                self.assertGreaterEqual(rect.right - rect.left, 290)
+                self.assertGreaterEqual(rect.bottom - rect.top, 300)
+                ctypes.windll.user32.PostMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE
+                self.assertEqual(process.wait(timeout=10), 0)
+                saved = json.loads(state_file.read_text(encoding="utf-8"))
+                self.assertFalse(saved["geometry"].startswith("1x1"))
+                self.assertEqual(saved["remaining"], 900)
+            finally:
+                if process.poll() is None:
+                    # Kill only this test's process tree, including the onefile child.
+                    subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                                   capture_output=True, check=False)
+                    process.wait(timeout=10)
+
+
+if __name__ == "__main__":
+    unittest.main()

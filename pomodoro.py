@@ -12,9 +12,14 @@ import threading
 import json
 import os
 import ctypes
+from ctypes import wintypes
+import re
 import webbrowser
 
 STATE_FILE = os.path.join(os.path.expanduser("~"), ".pomodoro_state.json")
+DEFAULT_GEOMETRY = "290x300+120+120"
+MIN_WINDOW_WIDTH = 290
+MIN_WINDOW_HEIGHT = 300
 
 VK_MEDIA_PLAY_PAUSE = 0xB3
 VK_MEDIA_NEXT_TRACK = 0xB0
@@ -28,7 +33,9 @@ class PomodoroApp:
         self.root.title("Pomodoro")
         self.root.overrideredirect(True)          # borderless widget
         self.root.attributes("-topmost", True)    # stay on top of all windows
-        self.root.geometry("290x300+120+120")
+        self._last_geometry = DEFAULT_GEOMETRY
+        self.root.geometry(self._last_geometry)
+        self.root.minsize(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
         self.root.configure(bg="#1e1e2e")
         self.root.resizable(False, False)
 
@@ -52,12 +59,9 @@ class PomodoroApp:
         # apply persisted topmost / geometry
         topmost = self._state.get("topmost", True)
         self.root.attributes("-topmost", topmost)
-        geom = self._state.get("geometry")
-        if geom:
-            try:
-                self.root.geometry(geom)
-            except Exception:
-                pass
+        self._last_geometry = (self._validated_geometry(self._state.get("geometry"))
+                               or self._default_geometry())
+        self.root.geometry(self._last_geometry)
         self.pin_btn.config(text="Unpin" if topmost else "Pin")
         self.vol_scale.set(self.volume)
         self.mute_var.set(self.muted)
@@ -79,6 +83,52 @@ class PomodoroApp:
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # ---------- state persistence ----------
+    def _screen_rects(self):
+        """Enumerate monitors so disconnected displays cannot hide the widget."""
+        rects = []
+        callback_type = ctypes.WINFUNCTYPE(
+            wintypes.BOOL, wintypes.HANDLE, wintypes.HDC,
+            ctypes.POINTER(wintypes.RECT), wintypes.LPARAM,
+        )
+
+        def collect(monitor, dc, rect, data):
+            r = rect.contents
+            rects.append((r.left, r.top, r.right, r.bottom))
+            return True
+
+        if ctypes.windll.user32.EnumDisplayMonitors(None, None, callback_type(collect), 0):
+            return rects
+        return [(0, 0, self.root.winfo_screenwidth(), self.root.winfo_screenheight())]
+
+    def _validated_geometry(self, value):
+        if not isinstance(value, str):
+            return None
+        match = re.fullmatch(r"(\d+)x(\d+)([+-]\d+)([+-]\d+)", value)
+        if not match:
+            return None
+        width, height = map(int, match.group(1, 2))
+        if width < MIN_WINDOW_WIDTH or height < MIN_WINDOW_HEIGHT:
+            return None
+        x_text, y_text = match.group(3, 4)
+        x, y = int(x_text), int(y_text)
+        # In Tk geometry, negative offsets are measured from the right/bottom.
+        if x_text.startswith("-"):
+            x += self.root.winfo_screenwidth() - width
+        if y_text.startswith("-"):
+            y += self.root.winfo_screenheight() - height
+        if any(left <= x and top <= y and x + width <= right and y + height <= bottom
+               for left, top, right, bottom in self._screen_rects()):
+            return value
+        return None
+
+    def _default_geometry(self):
+        # Keep the whole window visible, even on smaller primary displays.
+        width = self.root.winfo_screenwidth()
+        height = self.root.winfo_screenheight()
+        x = max(0, min(120, width - MIN_WINDOW_WIDTH))
+        y = max(0, min(120, height - MIN_WINDOW_HEIGHT))
+        return f"{MIN_WINDOW_WIDTH}x{MIN_WINDOW_HEIGHT}+{x}+{y}"
+
     @staticmethod
     def _load_state():
         try:
@@ -88,13 +138,19 @@ class PomodoroApp:
             return {}
 
     def _save_state(self):
+        # Before mapping (or while withdrawn), Tk can report a 1x1 window.
+        # Preserve the last known good size/position instead of saving that.
+        if self.root.winfo_ismapped():
+            geometry = self._validated_geometry(self.root.geometry())
+            if geometry:
+                self._last_geometry = geometry
         data = {
             "total": self.total,
             "remaining": self.remaining,
             "volume": self.volume,
             "muted": self.muted,
             "topmost": bool(self.root.attributes("-topmost")),
-            "geometry": self.root.geometry(),
+            "geometry": self._last_geometry,
         }
         try:
             with open(STATE_FILE, "w") as f:

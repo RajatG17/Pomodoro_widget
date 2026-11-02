@@ -94,3 +94,25 @@ settings. Media playback is not triggered by the tests.
 
 - The widget is borderless, so it has no taskbar button; use the `X` button in the header to close it.
 - To stop autostart, remove the shortcut/task/registry entry you created above.
+
+## Troubleshooting: app runs but no window appears
+
+Saved settings live in `%USERPROFILE%\.pomodoro_state.json`. Older versions
+could save an invisible `1x1` window, especially after running the old tests.
+The fixed version automatically rejects tiny, malformed, oversized, and off-screen
+window geometry and opens at a visible default position. Valid timer and audio
+settings are kept; hidden windows no longer overwrite the last valid geometry.
+
+Both the Python source and rebuilt `dist\PomodoroTimer.exe` include this recovery.
+
+### Packaged executable smoke test
+
+This opt-in test launches a temporary copy of the executable with isolated
+settings, checks that a visible, usable window appears from `1x1` saved geometry,
+then closes it. It does not launch Spotify or change your own settings.
+
+```powershell
+$env:POMODORO_TEST_EXE = (Resolve-Path .\dist\PomodoroTimer.exe).Path
+python -m unittest tests.test_executable -v
+Remove-Item Env:\POMODORO_TEST_EXE
+```

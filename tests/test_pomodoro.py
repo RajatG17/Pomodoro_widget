@@ -105,6 +105,64 @@ class PomodoroTests(unittest.TestCase):
         self.app._apply_alpha()
         self.assertAlmostEqual(float(self.app.root.attributes("-alpha")), 1.0, places=2)
 
+    def _app_from_state(self, state):
+        self.state_file.write_text(json.dumps(state), encoding="utf-8")
+        root = tk.Tk()
+        self.addCleanup(self._destroy_root, root)
+        root.withdraw()
+        return pomodoro.PomodoroApp(root)
+
+    def test_tiny_saved_geometry_recovers_visible_window(self):
+        app = self._app_from_state({"geometry": "1x1+120+120"})
+        app.root.deiconify()
+        app.root.update_idletasks()
+        self.assertGreaterEqual(app.root.winfo_width(), 290)
+        self.assertGreaterEqual(app.root.winfo_height(), 300)
+
+    def test_offscreen_saved_geometry_is_repositioned(self):
+        app = self._app_from_state({"geometry": "290x300+999999+999999"})
+        app.root.deiconify()
+        app.root.update_idletasks()
+        self.assertLess(app.root.winfo_x(), app.root.winfo_screenwidth())
+        self.assertLess(app.root.winfo_y(), app.root.winfo_screenheight())
+
+    def test_hidden_window_save_keeps_last_valid_geometry(self):
+        app = self._app_from_state({"geometry": "310x340+140+140"})
+        app._save_state()
+        saved = json.loads(self.state_file.read_text(encoding="utf-8"))
+        self.assertEqual(saved["geometry"], "310x340+140+140")
+
+    def test_malformed_geometry_uses_visible_default(self):
+        for geometry in (None, {}, 42, "garbage", "999999x999999+0+0"):
+            with self.subTest(geometry=geometry):
+                app = self._app_from_state({"geometry": geometry})
+                app.root.deiconify()
+                app.root.update_idletasks()
+                self.assertGreaterEqual(app.root.winfo_width(), 290)
+                self.assertLessEqual(app.root.winfo_width(), app.root.winfo_screenwidth())
+
+    def test_mapped_window_position_is_saved(self):
+        self.root.deiconify()
+        self.root.geometry("310x340+140+140")
+        self.root.update_idletasks()
+        self.app._save_state()
+        saved = json.loads(self.state_file.read_text(encoding="utf-8"))
+        self.assertEqual(saved["geometry"], "310x340+140+140")
+
+    def test_geometry_on_connected_secondary_monitor_is_preserved(self):
+        monitors = [(0, 0, 1920, 1080), (1920, 0, 3840, 1080)]
+        with patch.object(self.app, "_screen_rects", return_value=monitors):
+            self.assertEqual(self.app._validated_geometry("290x300+2000+120"),
+                             "290x300+2000+120")
+
+    def test_geometry_on_disconnected_monitor_is_rejected(self):
+        with patch.object(self.app, "_screen_rects", return_value=[(0, 0, 1920, 1080)]):
+            self.assertIsNone(self.app._validated_geometry("290x300+2000+120"))
+
+    def test_right_bottom_relative_geometry_remains_supported(self):
+        self.assertEqual(self.app._validated_geometry("290x300-10-10"),
+                         "290x300-10-10")
+
 
 class TestIsolationTests(unittest.TestCase):
     def test_state_writing_tests_leave_existing_settings_untouched(self):

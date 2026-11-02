@@ -16,6 +16,9 @@ class PomodoroTests(unittest.TestCase):
         state_patch = patch.object(pomodoro, "STATE_FILE", str(self.state_file))
         state_patch.start()
         self.addCleanup(state_patch.stop)
+        sound_patch = patch.object(pomodoro.PomodoroApp, "_play_sequence")
+        sound_patch.start()
+        self.addCleanup(sound_patch.stop)
         self.root = tk.Tk()
         self.addCleanup(self._destroy_root, self.root)
         self.root.withdraw()
@@ -46,6 +49,46 @@ class PomodoroTests(unittest.TestCase):
         self.app.add_time(-600)
         self.assertEqual(self.app.remaining, 0)
         self.assertGreaterEqual(self.app.total, self.app.remaining)
+
+    def test_removing_excess_time_preserves_elapsed_time(self):
+        self.app.total, self.app.remaining = 100, 10
+        with patch.object(self.app, "complete"):
+            self.app.add_time(-600)
+        self.assertEqual(self.app.total, 90)
+        self.assertEqual(self.app.remaining, 0)
+
+    def test_adjustment_to_zero_completes_once_and_cancels_tick(self):
+        self.app.total, self.app.remaining = 100, 10
+        self.app.toggle()
+        job = self.app.after_id
+        with patch.object(self.app, "complete") as complete:
+            self.app.add_time(-600)
+            self.app.add_time(-600)
+            self.app.tick()
+        complete.assert_called_once()
+        self.assertFalse(self.app.running)
+        self.assertTrue(self.app.completed)
+        self.assertIsNone(self.app.after_id)
+        self.assertNotIn(job, self.root.tk.call("after", "info"))
+
+    def test_extending_done_timer_clears_completed_flag(self):
+        self.app.total, self.app.remaining, self.app.completed = 100, 0, True
+        self.app.add_time(600)
+        self.assertEqual(self.app.remaining, 600)
+        self.assertFalse(self.app.completed)
+
+    def test_restarting_done_timer_clears_completed_flag(self):
+        self.app.remaining, self.app.completed = 0, True
+        self.app.toggle()
+        self.assertFalse(self.app.completed)
+        self.assertTrue(self.app.running)
+
+    def test_extension_is_bounded_to_persistable_duration(self):
+        self.app.total = pomodoro.MAX_SAVED_DURATION - 10
+        self.app.remaining = 100
+        self.app.add_time(600)
+        self.assertEqual(self.app.total, pomodoro.MAX_SAVED_DURATION)
+        self.assertEqual(self.app.remaining, 110)
 
     def test_set_duration_when_stopped(self):
         self.app.running = False

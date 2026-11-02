@@ -71,6 +71,9 @@ Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" 
   through countdown refreshes until the next action changes it.
 - Extend the running timer: `+1m`, `+5m`, `+10m` (or `+`/`-` keys).
 - Quick presets: 25m / 15m / 5m.
+- Time adjustments preserve elapsed time and clamp at zero remaining / one year
+  total. Removing all remaining time completes immediately, even while paused;
+  repeated subtraction does not repeat the alert.
 - Sound + flash when the timer completes (volume slider + mute in the widget).
 - The widget opens raised and fully opaque for 3 seconds (without stealing keyboard
   focus). A pinned, inactive window fades to ~80%; clicking or focusing it makes

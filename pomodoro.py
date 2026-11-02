@@ -490,6 +490,7 @@ class PomodoroApp:
         else:
             if self.remaining <= 0:
                 self.remaining = self.total
+            self.completed = False
             self.running = True
             self.start_btn.config(text="Pause")
             self.status_label.config(text="Running")
@@ -512,19 +513,23 @@ class PomodoroApp:
         self._save_state()
 
     def add_time(self, delta):
-        new_remaining = self.remaining + delta
-        if new_remaining < 0:
-            new_remaining = 0
-        if delta > 0:
-            self.total += delta
-        else:
-            if self.total + delta >= new_remaining and self.total + delta > 0:
-                self.total += delta
-        self.remaining = new_remaining
-        if self.total < self.remaining:
-            self.total = self.remaining
-        if self.total <= 0:
-            self.total = 1
+        # Adjust only the time actually available to remove/add. This keeps
+        # elapsed time (total - remaining) unchanged, except for the 1s floor.
+        delta = max(-self.remaining, min(delta, MAX_SAVED_DURATION - self.total))
+        if not delta:
+            return
+        self.remaining += delta
+        self.total = max(1, self.total + delta)
+        self.completed = self.remaining == 0
+        if self.completed:
+            self.running = False
+            if self.after_id:
+                self.root.after_cancel(self.after_id)
+                self.after_id = None
+            self.start_btn.config(text="Start")
+            self._update_display()
+            self.complete()
+            return
         label = f"{delta//60:+d}m" if delta % 60 == 0 else f"{delta:+d}s"
         self.status_label.config(text=label)
         self._update_display()
@@ -534,8 +539,8 @@ class PomodoroApp:
         if self.running:
             self.status_label.config(text="Stop first")
             return
-        self.total = secs
-        self.remaining = secs
+        self.total = max(1, min(secs, MAX_SAVED_DURATION))
+        self.remaining = self.total
         self.completed = False
         self.status_label.config(text=f"Set {secs//60}m")
         self._update_display()

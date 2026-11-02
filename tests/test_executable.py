@@ -81,6 +81,10 @@ class ExecutableTests(unittest.TestCase):
         self._check_window({"geometry": "99999x99999+0+0",
                             "total": 1500, "remaining": 900})
 
+    def test_relaunch_reuses_existing_timer(self):
+        self._check_window({"total": 1500, "remaining": 321}, expected_remaining=321,
+                           check_relaunch=True)
+
     def _assert_inside_monitor_work_area(self, hwnd, rect):
         class MonitorInfo(ctypes.Structure):
             _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT),
@@ -100,7 +104,7 @@ class ExecutableTests(unittest.TestCase):
         self.assertLessEqual(rect.bottom, info.rcWork.bottom)
 
     def _check_window(self, state, args=(), expected_remaining=900, expect_backup=False,
-                      expect_opaque=False):
+                      expect_opaque=False, check_relaunch=False):
         with tempfile.TemporaryDirectory() as directory:
             # A unique binary path identifies only our process, never a user's app.
             executable = Path(directory) / "PomodoroTimer.exe"
@@ -118,7 +122,10 @@ class ExecutableTests(unittest.TestCase):
                     if hwnd:
                         rect = wintypes.RECT()
                         ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
-                        if rect.right - rect.left >= 290 and rect.bottom - rect.top >= 300:
+                        user32 = ctypes.windll.user32
+                        user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+                        if (rect.right - rect.left >= 290 and rect.bottom - rect.top >= 300
+                                and user32.GetWindowLongW(hwnd, -20) & 0x40000):
                             break
                     time.sleep(0.1)
                 else:
@@ -126,6 +133,22 @@ class ExecutableTests(unittest.TestCase):
                 self.assertGreaterEqual(rect.right - rect.left, 290)
                 self.assertGreaterEqual(rect.bottom - rect.top, 300)
                 self._assert_inside_monitor_work_area(hwnd, rect)
+                user32 = ctypes.windll.user32
+                user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+                style = user32.GetWindowLongW(hwnd, -20)
+                self.assertTrue(style & 0x40000, "Taskbar/Alt+Tab entry is missing")
+                self.assertFalse(style & 0x80, "Window is still marked as a tool window")
+                if check_relaunch:
+                    secondary = subprocess.Popen([str(executable), "--no-global-hotkeys"], env=env)
+                    try:
+                        self.assertEqual(secondary.wait(timeout=10), 0)
+                        self.assertIsNone(process.poll(), "Relaunch closed the original app")
+                        self.assertEqual(self._find_window(executable), hwnd)
+                    finally:
+                        if secondary.poll() is None:
+                            subprocess.run(["taskkill", "/PID", str(secondary.pid), "/T", "/F"],
+                                           capture_output=True, check=False)
+                            secondary.wait(timeout=10)
                 if expect_opaque:
                     user32 = ctypes.windll.user32
                     user32.GetLayeredWindowAttributes.argtypes = [
@@ -151,6 +174,13 @@ class ExecutableTests(unittest.TestCase):
                     self.assertEqual(len(backups), 1)
                     self.assertEqual(backups[0].read_text(encoding="utf-8"), original)
             finally:
+                if process.poll() is None:
+                    if hwnd:
+                        ctypes.windll.user32.PostMessageW(hwnd, 0x0010, 0, 0)
+                        try:
+                            process.wait(timeout=10)
+                        except subprocess.TimeoutExpired:
+                            pass
                 if process.poll() is None:
                     # Kill only this test's process tree, including the onefile child.
                     subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],

@@ -63,6 +63,8 @@ Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" 
 
 - Stays on top of all windows (toggle with the "Pin"/"Unpin" button).
 - Borderless, draggable widget.
+- A taskbar/Alt+Tab entry makes the widget easy to find. Launching it again reveals
+  the existing timer instead of creating a duplicate or resetting its countdown.
 - Window size fits both tabs at the current display scaling; music controls use
   two rows so all four buttons remain accessible. Restoring or dragging the widget
   keeps it within a monitor's usable area, clear of the taskbar.
@@ -134,7 +136,10 @@ settings. Media playback is not triggered by the tests.
 
 ## Notes
 
-- The widget is borderless, so it has no taskbar button; use the `X` button in the header to close it.
+- Use the taskbar or Alt+Tab to find the borderless widget; use `X` to close it.
+- Only one app instance runs per Windows session and settings-file path. Relaunch
+  requests are sent to the existing window. `--reset-state` on a second launch
+  only reveals the running app; close it first if you intend to reset settings.
 - To stop autostart, remove the shortcut/task/registry entry you created above.
 
 ## Troubleshooting: app runs but no window appears
@@ -177,8 +182,9 @@ To restore a backup, close the app and copy that backup to
 
 This opt-in test launches a temporary copy of the executable with isolated
 settings, checks startup opacity and recovery from `1x1`, off-screen, oversized,
-or malformed settings, verifies taskbar-safe bounds and reset backups, then closes
-it. It does not launch Spotify or change your own settings.
+or malformed settings, verifies taskbar/Alt+Tab styles, duplicate-launch behavior,
+taskbar-safe bounds and reset backups, then closes it. It does not launch Spotify
+or change your own settings.
 
 ```powershell
 $env:POMODORO_TEST_EXE = (Resolve-Path .\dist\PomodoroTimer.exe).Path

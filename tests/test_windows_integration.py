@@ -1,8 +1,10 @@
 import unittest
 import os
+import ctypes
 from unittest.mock import Mock, MagicMock
 
-from windows_integration import GlobalHotkeys, HOTKEYS
+from windows_integration import GlobalHotkeys, HOTKEYS, SingleInstance, enable_taskbar
+from unittest.mock import patch
 
 
 class GlobalHotkeyTests(unittest.TestCase):
@@ -62,6 +64,64 @@ class GlobalHotkeyTests(unittest.TestCase):
             self.hotkeys._listen()
         self.assertIsInstance(self.hotkeys.error, OSError)
         self.assertEqual(self.user32.UnregisterHotKey.call_count, len(HOTKEYS))
+
+
+class InstanceAndTaskbarTests(unittest.TestCase):
+    def _instance(self, already_exists=False):
+        kernel = MagicMock()
+        kernel.CreateMutexW.return_value = 11
+        kernel.CreateEventW.return_value = 12
+        with patch("windows_integration.ctypes.get_last_error", return_value=183 if already_exists else 0):
+            instance = SingleInstance("C:\\test-profile\\state.json", kernel)
+        return instance, kernel
+
+    def test_secondary_notifies_existing_instance_and_releases_handles_once(self):
+        instance, kernel = self._instance(already_exists=True)
+        self.assertFalse(instance.primary)
+        instance.notify()
+        kernel.SetEvent.assert_called_once_with(12)
+        instance.close()
+        instance.close()
+        self.assertEqual(kernel.CloseHandle.call_count, 2)
+
+    def test_primary_dispatches_show_request_on_ui_thread(self):
+        instance, kernel = self._instance()
+        self.assertTrue(instance.primary)
+        root, callback = Mock(), Mock()
+        root.after.return_value = "show-poll"
+        instance.attach(root, callback)
+        kernel.WaitForSingleObject.return_value = 0
+        instance._poll()
+        callback.assert_called_once()
+        instance.close()
+        root.after_cancel.assert_called_once_with("show-poll")
+
+    def test_different_settings_paths_have_independent_instance_names(self):
+        instance, kernel = self._instance()
+        with patch("windows_integration.ctypes.get_last_error", return_value=0):
+            other = SingleInstance("C:\\another-profile\\state.json", kernel)
+        self.assertNotEqual(instance.name, other.name)
+        instance.close()
+        other.close()
+
+    def test_failed_event_creation_releases_mutex(self):
+        kernel = MagicMock()
+        kernel.CreateMutexW.return_value = 11
+        kernel.CreateEventW.return_value = 0
+        with patch("windows_integration.ctypes.get_last_error", return_value=0):
+            with self.assertRaises(OSError):
+                SingleInstance("C:\\test-profile\\state.json", kernel)
+        kernel.CloseHandle.assert_called_once_with(11)
+
+    def test_taskbar_style_is_applied_to_tk_outer_window(self):
+        root, user32 = Mock(), MagicMock()
+        user32.GetAncestor.return_value = 42
+        suffix = "Ptr" if ctypes.sizeof(ctypes.c_void_p) == 8 else ""
+        get_style = getattr(user32, f"GetWindowLong{suffix}W")
+        set_style = getattr(user32, f"SetWindowLong{suffix}W")
+        get_style.return_value = 0x80
+        self.assertEqual(enable_taskbar(root, user32), 42)
+        set_style.assert_called_once_with(42, -20, 0x40000)
 
 
 @unittest.skipUnless(os.environ.get("POMODORO_TEST_HOTKEYS") == "1",

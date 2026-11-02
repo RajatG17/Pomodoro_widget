@@ -1,4 +1,5 @@
 import json
+import ctypes
 import tempfile
 import unittest
 import tkinter as tk
@@ -551,6 +552,50 @@ class PomodoroTests(unittest.TestCase):
                 pomodoro.main(["--reset-state"])
         self.assertEqual(raised.exception.code, 1)
         root.assert_not_called()
+
+    def test_relaunch_notifies_primary_without_resetting_state_or_creating_window(self):
+        with patch.object(pomodoro, "SingleInstance") as guard, \
+                patch.object(pomodoro, "backup_saved_state") as backup, \
+                patch.object(pomodoro.tk, "Tk") as root:
+            guard.return_value.primary = False
+            pomodoro.main(["--reset-state"])
+        guard.return_value.notify.assert_called_once()
+        guard.return_value.close.assert_called_once()
+        backup.assert_not_called()
+        root.assert_not_called()
+
+    def test_show_existing_window_preserves_timer_and_reveals_widget(self):
+        self.app.remaining = 123
+        with patch.object(self.root, "focus_force") as focus:
+            self.app.show_window()
+            self.root.update()
+        self.assertTrue(self.root.winfo_ismapped())
+        self.assertEqual(self.app.remaining, 123)
+        focus.assert_called_once()
+        self.assertAlmostEqual(float(self.root.attributes("-alpha")), 1.0, places=2)
+
+    def test_taskbar_entry_survives_mapping_fading_and_pin_changes(self):
+        self.app.enable_desktop_presence()
+        self.root.deiconify()
+        self.root.update()
+        user32 = ctypes.WinDLL("user32")
+        user32.GetAncestor.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+        user32.GetAncestor.restype = ctypes.c_void_p
+        user32.GetWindowLongW.argtypes = [ctypes.c_void_p, ctypes.c_int]
+
+        def check_style():
+            self.root.update()
+            hwnd = user32.GetAncestor(self.root.winfo_id(), 2)
+            style = user32.GetWindowLongW(hwnd, -20)
+            self.assertTrue(style & 0x40000)
+            self.assertFalse(style & 0x80)
+
+        check_style()
+        with patch.object(self.root, "focus_displayof", return_value=None):
+            self.app._apply_alpha()
+        check_style()
+        self.app.toggle_topmost()
+        check_style()
 
 
 class TestIsolationTests(unittest.TestCase):

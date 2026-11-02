@@ -20,7 +20,7 @@ import logging
 import tempfile
 from datetime import datetime
 from pathlib import Path
-from windows_integration import GlobalHotkeys
+from windows_integration import GlobalHotkeys, SingleInstance, enable_taskbar
 
 STATE_FILE = os.path.join(os.path.expanduser("~"), ".pomodoro_state.json")
 DEFAULT_GEOMETRY = "290x300+120+120"
@@ -76,6 +76,8 @@ class PomodoroApp:
         self._opaque_after = None
         self._state_after = None
         self._hotkeys = None
+        self._desktop_presence = False
+        self._taskbar_after = None
 
         self._build_ui()
         self.root.update_idletasks()
@@ -103,6 +105,7 @@ class PomodoroApp:
         self.root.bind("<FocusIn>", self._on_click, add="+")
         self.root.bind("<FocusOut>", self._schedule_fade, add="+")
         self.root.bind("<Map>", self._on_map, add="+")
+        self.root.bind("<Configure>", self._queue_taskbar_refresh, add="+")
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._initializing = False
         if not was_withdrawn:
@@ -282,12 +285,58 @@ class PomodoroApp:
         self._save_state()
 
     def _on_close(self):
-        if self._hotkeys is not None:
-            self._hotkeys.close()
-            self._hotkeys = None
+        self.stop_global_hotkeys()
+        if self._taskbar_after is not None:
+            self.root.after_cancel(self._taskbar_after)
+            self._taskbar_after = None
         self._cancel_fade()
         self._save_state()
         self.root.destroy()
+
+    def stop_global_hotkeys(self):
+        if self._hotkeys is not None:
+            self._hotkeys.close()
+            self._hotkeys = None
+
+    def enable_desktop_presence(self):
+        self._desktop_presence = True
+        was_visible = self.root.state() != "withdrawn"
+        self.root.withdraw()
+        self.root.update_idletasks()
+        try:
+            enable_taskbar(self.root)
+        except OSError:
+            logging.getLogger(__name__).warning("Taskbar integration unavailable", exc_info=True)
+            self.status_label.config(text="Taskbar integration unavailable")
+        if was_visible:
+            self.root.deiconify()
+
+    def _queue_taskbar_refresh(self, event=None):
+        if event is not None and event.widget is not self.root:
+            return
+        if self._desktop_presence and self._taskbar_after is None:
+            self._taskbar_after = self.root.after_idle(self._refresh_taskbar)
+
+    def _refresh_taskbar(self):
+        self._taskbar_after = None
+        try:
+            enable_taskbar(self.root)
+        except OSError:
+            logging.getLogger(__name__).warning("Taskbar integration unavailable", exc_info=True)
+
+    def _set_alpha(self, alpha):
+        self.root.attributes("-alpha", alpha)
+        # Tk rewrites extended styles when changing opacity. Restore shell
+        # visibility after its pending map/configure/attribute updates finish.
+        self._queue_taskbar_refresh()
+
+    def show_window(self):
+        self._set_window_geometry(self._fit_geometry(self.root.geometry()))
+        self.root.deiconify()
+        self.root.lift()
+        # Explicit relaunch/show requests may take focus; startup still does not.
+        self.root.focus_force()
+        self._on_click()
 
     def _bind_local_shortcuts(self):
         tag = f"PomodoroShortcuts{id(self)}"
@@ -477,14 +526,14 @@ class PomodoroApp:
         return "break"
 
     def _on_click(self, event=None):
-        self.root.attributes("-alpha", 1.0)
+        self._set_alpha(1.0)
         self._schedule_fade()
 
     def _on_map(self, event):
         if event.widget is self.root:
             # Raise without forcing keyboard focus away from another app.
             self.root.lift()
-            self.root.attributes("-alpha", 1.0)
+            self._set_alpha(1.0)
             self._schedule_fade(delay=3000)
 
     def _cancel_fade(self):
@@ -507,9 +556,9 @@ class PomodoroApp:
 
     def _apply_alpha(self):
         if bool(self.root.attributes("-topmost")) and not self._has_focus():
-            self.root.attributes("-alpha", 0.8)
+            self._set_alpha(0.8)
         else:
-            self.root.attributes("-alpha", 1.0)
+            self._set_alpha(1.0)
 
     def toggle_topmost(self):
         cur = bool(self.root.attributes("-topmost"))
@@ -739,16 +788,33 @@ def main(argv=None):
     parser.add_argument("--no-global-hotkeys", action="store_true",
                         help="Disable system-wide Ctrl+Alt shortcuts")
     args = parser.parse_args(argv)
-    if args.reset_state:
-        try:
-            backup_saved_state()
-        except OSError as error:
-            parser.exit(1, f"Could not back up settings; nothing was reset: {error}\n")
-    root = tk.Tk()
-    app = PomodoroApp(root)
-    if not args.no_global_hotkeys:
-        app.start_global_hotkeys()
-    root.mainloop()
+    try:
+        instance = SingleInstance(STATE_FILE)
+    except OSError as error:
+        parser.exit(1, f"Could not coordinate Pomodoro instances: {error}\n")
+    app = None
+    try:
+        if not instance.primary:
+            instance.notify()
+            return
+        if args.reset_state:
+            try:
+                backup_saved_state()
+            except OSError as error:
+                parser.exit(1, f"Could not back up settings; nothing was reset: {error}\n")
+        root = tk.Tk()
+        root.withdraw()
+        app = PomodoroApp(root)
+        app.enable_desktop_presence()
+        instance.attach(root, app.show_window)
+        if not args.no_global_hotkeys:
+            app.start_global_hotkeys()
+        root.deiconify()
+        root.mainloop()
+    finally:
+        if app is not None:
+            app.stop_global_hotkeys()
+        instance.close()
 
 
 if __name__ == "__main__":

@@ -67,6 +67,8 @@ Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" 
   two rows so all four buttons remain accessible. Restoring or dragging the widget
   keeps it within a monitor's usable area, clear of the taskbar.
 - Start / Pause / Reset.
+- Status feedback (such as `Set 5m`, `+10m`, `Paused`, and `Done!`) remains visible
+  through countdown refreshes until the next action changes it.
 - Extend the running timer: `+1m`, `+5m`, `+10m` (or `+`/`-` keys).
 - Quick presets: 25m / 15m / 5m.
 - Sound + flash when the timer completes (volume slider + mute in the widget).

@@ -88,8 +88,8 @@ class PomodoroApp:
         self.root.attributes("-alpha", 1.0)
 
         self._update_display()
-        if self.completed:
-            self.status_label.config(text="Done!")
+        self.status_label.config(text=("Done!" if self.completed else
+                                       "Paused" if self.remaining < self.total else "Ready"))
 
         # keyboard shortcuts: +/- 10 minutes
         self.root.bind("<space>", lambda e: self.toggle())
@@ -461,8 +461,6 @@ class PomodoroApp:
             self.progress["value"] = max(0, min(100, pct))
         else:
             self.progress["value"] = 0
-        if not self.running:
-            self.status_label.config(text="Paused" if self.remaining < self.total else "Ready")
 
     def tick(self):
         if not self.running:

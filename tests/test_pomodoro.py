@@ -60,6 +60,31 @@ class PomodoroTests(unittest.TestCase):
         self.app.set_duration(300)
         self.assertEqual(self.app.total, 100)
 
+    def test_duration_feedback_survives_display_refresh(self):
+        self.app.set_duration(300)
+        self.app._update_display()
+        self.assertEqual(self.app.status_label.cget("text"), "Set 5m")
+
+    def test_time_adjustment_feedback_survives_display_refresh(self):
+        self.app.add_time(600)
+        self.app._update_display()
+        self.assertEqual(self.app.status_label.cget("text"), "+10m")
+
+    def test_done_feedback_survives_display_refresh(self):
+        with patch.object(pomodoro.threading, "Thread"), patch.object(self.app, "flash"):
+            self.app.complete()
+        self.app._update_display()
+        self.assertEqual(self.app.status_label.cget("text"), "Done!")
+
+    def test_pausing_before_first_tick_still_says_paused(self):
+        self.app.toggle()
+        self.app.toggle()
+        self.assertEqual(self.app.status_label.cget("text"), "Paused")
+
+    def test_restored_partial_timer_says_paused(self):
+        app = self._app_from_state({"total": 1500, "remaining": 600})
+        self.assertEqual(app.status_label.cget("text"), "Paused")
+
     def test_volume_mute(self):
         self.app._on_volume(50)
         self.assertFalse(self.app.muted)

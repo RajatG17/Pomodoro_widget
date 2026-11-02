@@ -67,12 +67,16 @@ Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" 
 - Extend the running timer: `+1m`, `+5m`, `+10m` (or `+`/`-` keys).
 - Quick presets: 25m / 15m / 5m.
 - Sound + flash when the timer completes (volume slider + mute in the widget).
+- Pinned window is translucent (~80%) and becomes opaque when clicked.
+- Remembers last state (duration, remaining time, volume, mute, pin, position) between runs.
+- Music tab with media-key controls (play/pause, next, prev, stop) and Spotify open/launch.
+- Keyboard `+`/`-` adjust by 10 minutes.
 
 ## Keyboard shortcuts
 
 - `Space` - Start/Pause
 - `R` - Reset
-- `+` / `-` - Add/remove 1 minute
+- `+` / `-` - Add/remove 10 minutes
 
 ## Notes
 

@@ -21,6 +21,7 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 from windows_integration import GlobalHotkeys, SingleInstance, enable_taskbar, window_is_foreground
+from session_plan import SessionPlan, PHASE_LABELS, SETTING_LIMITS
 
 STATE_FILE = os.path.join(os.path.expanduser("~"), ".pomodoro_state.json")
 DEFAULT_GEOMETRY = "290x300+120+120"
@@ -72,6 +73,9 @@ class PomodoroApp:
         self.drag_x = 0
         self.drag_y = 0
         self.completed = self.remaining == 0
+        self.sessions = SessionPlan.from_state(self._state.get("session_plan"), completed=self.completed)
+        self._completion_notified = self.completed
+        self._flash_after = None
         self.volume = self._state.get("volume", 70)
         self.muted = self._state.get("muted", False)
         self._opaque_after = None
@@ -230,6 +234,8 @@ class PomodoroApp:
             "muted": state.get("muted") if type(state.get("muted")) is bool else False,
             "topmost": state.get("topmost") if type(state.get("topmost")) is bool else True,
             "geometry": state.get("geometry"),
+            "session_plan": SessionPlan.from_state(state.get("session_plan"),
+                                                    completed=remaining <= 0).to_state(),
         }
 
     def _save_state(self):
@@ -249,6 +255,7 @@ class PomodoroApp:
             "muted": self.muted,
             "topmost": bool(self.root.attributes("-topmost")),
             "geometry": self._last_geometry,
+            "session_plan": self.sessions.to_state(),
         }
         temporary = None
         try:
@@ -288,6 +295,8 @@ class PomodoroApp:
 
     def _on_close(self):
         self.stop_global_hotkeys()
+        self._cancel_tick()
+        self._cancel_flash()
         if self._focus_after is not None:
             self.root.after_cancel(self._focus_after)
             self._focus_after = None
@@ -387,6 +396,56 @@ class PomodoroApp:
             self.status_label.config(text="Global shortcuts unavailable")
             self._hotkeys = None
 
+    # ---------- work / break sessions ----------
+    def _session_stats(self):
+        return f"Completed work sessions: {self.sessions.completed_sessions}"
+
+    def _phase_text(self):
+        title = self.sessions.phase_title()
+        if self.completed:
+            title = f"{PHASE_LABELS[self.sessions.phase]} done · Next: {PHASE_LABELS[self.sessions.next_phase()]}"
+        return f"{title}\n{self._session_stats()}"
+
+    def select_phase(self, phase):
+        if self.running:
+            self.status_label.config(text="Pause before changing phase")
+            return False
+        self.sessions.select_phase(phase)
+        self._cancel_tick()
+        self._cancel_flash()
+        self.total = self.remaining = self.sessions.duration()
+        self.completed = self._completion_notified = False
+        self.start_btn.config(text="Start")
+        self.status_label.config(text="Ready")
+        self._update_display()
+        self._save_state()
+        return True
+
+    def next_phase(self):
+        return self.select_phase(self.sessions.next_phase())
+
+    def apply_session_settings(self):
+        try:
+            values = {field: int(variable.get()) for field, variable in self.session_vars.items()}
+        except ValueError:
+            self.session_settings_status.config(text="Use whole numbers for all plan settings.", fg="#f38ba8")
+            return False
+        try:
+            self.sessions.configure(**values)
+        except ValueError as error:
+            self.session_settings_status.config(text=f"Invalid plan: {error}", fg="#f38ba8")
+            return False
+        self.session_settings_status.config(text="Saved; applies to future phases.", fg="#a6e3a1")
+        self._update_display()
+        self._save_state()
+        return True
+
+    def reset_session_count(self):
+        self.sessions.completed_sessions = 0
+        self.session_settings_status.config(text="Session count reset.", fg="#a6adc8")
+        self._update_display()
+        self._save_state()
+
     # ---------- UI ----------
     def _build_ui(self):
         # header (draggable)
@@ -414,10 +473,27 @@ class PomodoroApp:
         self.notebook.pack(fill="both", expand=True)
         timer_tab = tk.Frame(self.notebook, bg="#1e1e2e")
         music_tab = tk.Frame(self.notebook, bg="#1e1e2e")
+        sessions_tab = tk.Frame(self.notebook, bg="#1e1e2e")
         self.notebook.add(timer_tab, text="Timer")
         self.notebook.add(music_tab, text="Music")
+        self.notebook.add(sessions_tab, text="Sessions")
 
         # ---- Timer tab ----
+        self.phase_label = tk.Label(timer_tab, text=self._phase_text(), fg="#89b4fa",
+                                    bg="#1e1e2e", font=("Segoe UI", 9, "bold"), height=2)
+        self.phase_label.pack(pady=(4, 0))
+        phase_controls = tk.Frame(timer_tab, bg="#1e1e2e")
+        phase_controls.pack(pady=2)
+        self.phase_buttons = []
+        for text, phase in (("Work", "work"), ("Short", "short_break"), ("Long", "long_break")):
+            button = tk.Button(phase_controls, text=text, command=lambda phase=phase: self.select_phase(phase),
+                               bg="#45475a", fg="#cdd6f4", bd=0, font=("Segoe UI", 9), width=6)
+            button.pack(side="left", padx=2)
+            self.phase_buttons.append(button)
+        self.next_phase_btn = tk.Button(phase_controls, text="Next phase", command=self.next_phase,
+                                        bg="#45475a", fg="#cdd6f4", bd=0,
+                                        font=("Segoe UI", 9), width=9)
+        self.next_phase_btn.pack(side="left", padx=2)
         self.time_label = tk.Label(timer_tab, text="25:00", fg="#cdd6f4",
                                   bg="#1e1e2e", font=("Consolas", 42, "bold"))
         self.time_label.pack(pady=(10, 2))
@@ -511,6 +587,38 @@ class PomodoroApp:
         tk.Label(music_tab, text="Media keys control the active player\n(Spotify or another media app).",
                 fg="#6c7086", bg="#1e1e2e", font=("Segoe UI", 8)).pack(pady=(8, 4))
 
+        # ---- Sessions tab ----
+        tk.Label(sessions_tab, text="Work / break plan", fg="#cdd6f4", bg="#1e1e2e",
+                 font=("Segoe UI", 11, "bold")).pack(pady=(10, 6))
+        settings = tk.Frame(sessions_tab, bg="#1e1e2e")
+        settings.pack(padx=10, pady=4)
+        self.session_vars = {}
+        for row, (field, label) in enumerate((("work_minutes", "Work (min)"),
+                                               ("short_break_minutes", "Short break (min)"),
+                                               ("long_break_minutes", "Long break (min)"),
+                                               ("long_break_every", "Sessions per long break"))):
+            tk.Label(settings, text=label, fg="#a6adc8", bg="#1e1e2e",
+                     font=("Segoe UI", 9)).grid(row=row, column=0, sticky="w", padx=4, pady=3)
+            variable = tk.StringVar(value=str(getattr(self.sessions, field)))
+            self.session_vars[field] = variable
+            minimum, maximum = SETTING_LIMITS[field]
+            tk.Spinbox(settings, from_=minimum, to=maximum, textvariable=variable, width=5,
+                       bg="#45475a", fg="#cdd6f4", insertbackground="#cdd6f4",
+                       font=("Segoe UI", 9)).grid(row=row, column=1, padx=4, pady=3)
+        tk.Button(sessions_tab, text="Save plan", command=self.apply_session_settings,
+                  bg="#a6e3a1", fg="#1e1e2e", bd=0, font=("Segoe UI", 9, "bold")).pack(pady=4)
+        self.session_settings_status = tk.Label(sessions_tab, text="Changes apply to future phases.",
+                                                fg="#a6adc8", bg="#1e1e2e",
+                                                font=("Segoe UI", 9), wraplength=260, height=3)
+        self.session_settings_status.pack(padx=8)
+        self.session_stats_label = tk.Label(sessions_tab, text=self._session_stats(), fg="#cdd6f4",
+                                            bg="#1e1e2e", font=("Segoe UI", 9))
+        self.session_stats_label.pack(pady=4)
+        tk.Button(sessions_tab, text="Reset session count", command=self.reset_session_count,
+                  bg="#45475a", fg="#cdd6f4", bd=0, font=("Segoe UI", 9)).pack(pady=4)
+        tk.Label(sessions_tab, text="Next phase skips without counting.\nEach phase starts only when you press Start.",
+                 fg="#6c7086", bg="#1e1e2e", font=("Segoe UI", 8)).pack(pady=6)
+
     # ---------- drag ----------
     def start_drag(self, event):
         self.drag_x = event.x
@@ -593,6 +701,12 @@ class PomodoroApp:
 
     def _update_display(self):
         self.time_label.config(text=self.fmt(self.remaining))
+        self.phase_label.config(text=self._phase_text())
+        self.session_stats_label.config(text=self._session_stats())
+        self.start_btn.config(text="Pause" if self.running else "Start next" if self.completed else "Start")
+        state = "disabled" if self.running else "normal"
+        for button in (*self.phase_buttons, self.next_phase_btn):
+            button.config(state=state)
         if self.total > 0:
             pct = (1 - self.remaining / self.total) * 100
             self.progress["value"] = max(0, min(100, pct))
@@ -626,7 +740,7 @@ class PomodoroApp:
             self.status_label.config(text="Paused")
         else:
             if self.remaining <= 0:
-                self.remaining = self.total
+                self.next_phase()
             self.completed = False
             self.running = True
             self.start_btn.config(text="Pause")
@@ -642,12 +756,20 @@ class PomodoroApp:
             self.after_id = None
         self.remaining = self.total
         self.completed = False
+        self.sessions.phase_recorded = False
+        self._completion_notified = False
+        self._cancel_flash()
         self.start_btn.config(text="Start")
         self.status_label.config(text="Ready")
         self._update_display()
         self.root.configure(bg="#1e1e2e")
         self.time_label.configure(bg="#1e1e2e")
         self._save_state()
+
+    def _cancel_tick(self):
+        if self.after_id:
+            self.root.after_cancel(self.after_id)
+            self.after_id = None
 
     def add_time(self, delta):
         # Adjust only the time actually available to remove/add. This keeps
@@ -657,6 +779,9 @@ class PomodoroApp:
             return
         self.remaining += delta
         self.total = max(1, self.total + delta)
+        if delta > 0:
+            self._completion_notified = False
+            self._cancel_flash()
         self.completed = self.remaining == 0
         if self.completed:
             self.running = False
@@ -679,6 +804,9 @@ class PomodoroApp:
         self.total = max(1, min(secs, MAX_SAVED_DURATION))
         self.remaining = self.total
         self.completed = False
+        self.sessions.phase_recorded = False
+        self._completion_notified = False
+        self._cancel_flash()
         self.status_label.config(text=f"Set {secs//60}m")
         self._update_display()
         self._save_state()
@@ -732,13 +860,29 @@ class PomodoroApp:
             self._play_tone(freq, ms)
 
     def complete(self):
+        self._cancel_tick()
+        self.running = False
+        self.remaining = 0
         self.completed = True
+        self.sessions.finish_phase()
         self.status_label.config(text="Done!")
-        threading.Thread(target=self._play_sequence, daemon=True).start()
-        self.flash(0)
+        self._update_display()
+        if not self._completion_notified:
+            self._completion_notified = True
+            self._cancel_flash()
+            threading.Thread(target=self._play_sequence, daemon=True).start()
+            self.flash(0)
         self._save_state()
 
+    def _cancel_flash(self):
+        if self._flash_after is not None:
+            self.root.after_cancel(self._flash_after)
+            self._flash_after = None
+        self.root.configure(bg="#1e1e2e")
+        self.time_label.configure(bg="#1e1e2e")
+
     def flash(self, n):
+        self._flash_after = None
         if n >= 8:
             self.root.configure(bg="#1e1e2e")
             self.time_label.configure(bg="#1e1e2e")
@@ -746,7 +890,7 @@ class PomodoroApp:
         color = "#f38ba8" if n % 2 == 0 else "#1e1e2e"
         self.root.configure(bg=color)
         self.time_label.configure(bg=color)
-        self.root.after(180, lambda: self.flash(n + 1))
+        self._flash_after = self.root.after(180, lambda: self.flash(n + 1))
 
     # ---------- media / spotify ----------
     def _media_key(self, vk):

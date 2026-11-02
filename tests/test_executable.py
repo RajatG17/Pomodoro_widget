@@ -92,6 +92,23 @@ class ExecutableTests(unittest.TestCase):
         self._check_window({"total": 1500, "remaining": 321}, expected_remaining=321,
                            check_relaunch=True)
 
+    def test_packaged_restores_break_and_session_settings(self):
+        plan = {"phase": "short_break", "completed_sessions": 7, "work_minutes": 45,
+                "short_break_minutes": 10, "long_break_minutes": 20, "long_break_every": 3,
+                "phase_recorded": False}
+        self._check_window({"total": 600, "remaining": 123, "session_plan": plan},
+                           expected_remaining=123, expected_session_plan=plan)
+
+    def test_packaged_legacy_settings_get_default_session_plan(self):
+        self._check_window({"total": 1500, "remaining": 900},
+                           expected_session_plan={"phase": "work", "completed_sessions": 0,
+                                                  "work_minutes": 25, "short_break_minutes": 5})
+
+    def test_packaged_completed_session_is_not_recounted_on_open(self):
+        plan = {"phase": "work", "completed_sessions": 4, "phase_recorded": True}
+        self._check_window({"total": 1500, "remaining": 0, "session_plan": plan},
+                           expected_remaining=0, expected_session_plan=plan)
+
     def _assert_inside_monitor_work_area(self, hwnd, rect):
         class MonitorInfo(ctypes.Structure):
             _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT),
@@ -154,7 +171,8 @@ class ExecutableTests(unittest.TestCase):
             background.destroy()
 
     def _check_window(self, state, args=(), expected_remaining=900, expect_backup=False,
-                      check_focus=False, check_relaunch=False, check_inactive=False):
+                      check_focus=False, check_relaunch=False, check_inactive=False,
+                      expected_session_plan=None):
         with tempfile.TemporaryDirectory() as directory:
             # A unique binary path identifies only our process, never a user's app.
             executable = Path(directory) / "PomodoroTimer.exe"
@@ -224,6 +242,9 @@ class ExecutableTests(unittest.TestCase):
                 saved = json.loads(state_file.read_text(encoding="utf-8"))
                 self.assertFalse(saved["geometry"].startswith("1x1"))
                 self.assertEqual(saved["remaining"], expected_remaining)
+                if expected_session_plan is not None:
+                    for field, value in expected_session_plan.items():
+                        self.assertEqual(saved["session_plan"][field], value, field)
                 if expect_backup:
                     backups = list(Path(directory).glob(".pomodoro_state.json.backup-*"))
                     self.assertEqual(len(backups), 1)

@@ -69,6 +69,8 @@ Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" 
   two rows so all four buttons remain accessible. Restoring or dragging the widget
   keeps it within a monitor's usable area, clear of the taskbar.
 - Start / Pause / Reset.
+- Work sessions, short breaks, and long breaks with a persistent completed-session
+  count and configurable plan in the **Sessions** tab.
 - Status feedback (such as `Set 5m`, `+10m`, `Paused`, and `Done!`) remains visible
   through countdown refreshes until the next action changes it.
 - Extend the running timer: `+1m`, `+5m`, `+10m` (or `+`/`-` keys).
@@ -82,12 +84,43 @@ Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" 
   **100% opaque**. This applies both pinned and unpinned. Focus loss updates at
   the next UI idle cycle, with a 100 ms Windows foreground check as a fallback;
   there is no two-second fade delay. Startup does not steal keyboard focus.
-- Remembers last state (duration, remaining time, volume, mute, pin, position) between runs.
+- Remembers last state (phase, session count/plan, duration, remaining time, volume,
+  mute, pin, position) between runs. Reopening never starts a countdown automatically.
 - Volume-slider saves are debounced by 250 ms; closing the app flushes pending
   changes. Settings are written to a temporary sibling file and atomically
   replaced, so a failed write does not truncate the previous settings.
 - Music tab with media-key controls (play/pause, next, prev, stop) and Spotify open/launch.
 - Keyboard `+`/`-` adjust by 10 minutes.
+
+## Work sessions and breaks
+
+The default cycle is **25 minutes work → 5 minutes short break**, with a
+**15-minute long break after every four completed work sessions**.
+
+- The **Timer** tab shows the current phase, session number, and completed work
+  count. Use **Work**, **Short**, or **Long** to choose a phase while stopped or
+  paused. These buttons load the configured duration, but do not start it.
+- When a timer finishes, it alerts and waits at zero. **Start next** (or `Space` /
+  the global Start/Pause shortcut) loads and starts the next work/break phase.
+  **Next phase** loads the next phase but leaves it paused. No phase auto-starts.
+- Only completed work phases increase the count. Breaks and skipped phases do
+  not. Extending a just-finished work timer does not count that same session twice.
+- **Reset** restarts the current phase's timer (including any duration adjustment)
+  without erasing the completed-session history. Presets adjust only the current
+  timer, not the saved plan. Pause before changing phases.
+- In **Sessions**, edit durations and the long-break interval, then click
+  **Save plan**. Changes apply to future phases, not the timer already running.
+  **Reset session count** clears the history/cycle without interrupting a countdown.
+- Phase, count, plan settings, and paused remaining time survive restarts. Old
+  settings files retain their existing timer and get the default work/break plan;
+  previously finished timers are not retroactively credited as work sessions.
+
+| Plan setting | Default | Allowed range |
+| --- | --- | --- |
+| Work | 25 minutes | 1–240 minutes |
+| Short break | 5 minutes | 1–120 minutes |
+| Long break | 15 minutes | 1–240 minutes |
+| Sessions per long break | 4 | 1–24 sessions |
 
 ## Keyboard shortcuts
 
@@ -208,6 +241,7 @@ This opt-in test launches a temporary copy of the executable with isolated
 settings, checks 20%/100% opacity while switching real foreground windows and
 recovery from `1x1`, off-screen, oversized,
 or malformed settings, verifies taskbar/Alt+Tab styles, duplicate-launch behavior,
+work/break plan persistence and backward compatibility,
 taskbar-safe bounds and reset backups, then closes it. It does not launch Spotify
 or change your own settings.
 The foreground-switching check temporarily activates test windows where Windows

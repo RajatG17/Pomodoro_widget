@@ -406,14 +406,16 @@ class PomodoroTests(unittest.TestCase):
     def test_window_is_fitted_inside_usable_work_area(self):
         with patch.object(self.app, "_screen_rects", return_value=[(40, 20, 800, 600)]):
             fitted = self.app._fit_geometry("310x340+750+550")
-            self.assertEqual(self.app._geometry_parts(fitted), (310, 340, 490, 260))
+            width, height = self._usable_test_size()
+            self.assertEqual(self.app._geometry_parts(fitted), (width, height, 800 - width, 600 - height))
             self.assertIsNotNone(self.app._validated_geometry(fitted))
 
     def test_negative_monitor_coordinates_roundtrip_without_jumping(self):
-        geometry = self.app._format_geometry(310, 340, -1000, 120)
+        width, height = self._usable_test_size()
+        geometry = self.app._format_geometry(width, height, -1000, 120)
         with patch.object(self.app, "_screen_rects", return_value=[(-1280, 0, 0, 1024)]):
             fitted = self.app._fit_geometry(geometry)
-            self.assertEqual(self.app._geometry_parts(fitted), (310, 340, -1000, 120))
+            self.assertEqual(self.app._geometry_parts(fitted), (width, height, -1000, 120))
             self.assertEqual(self.app._validated_geometry(fitted), fitted)
 
     def test_small_work_area_keeps_window_header_reachable(self):
@@ -472,9 +474,10 @@ class PomodoroTests(unittest.TestCase):
 
     def test_hidden_window_save_keeps_last_valid_geometry(self):
         app = self._app_from_state({"geometry": "310x340+140+140"})
+        expected = app._last_geometry
         app._save_state()
         saved = json.loads(self.state_file.read_text(encoding="utf-8"))
-        self.assertEqual(saved["geometry"], "310x340+140+140")
+        self.assertEqual(saved["geometry"], expected)
 
     def test_malformed_geometry_uses_visible_default(self):
         for geometry in (None, {}, 42, "garbage", "999999x999999+0+0",
@@ -490,23 +493,29 @@ class PomodoroTests(unittest.TestCase):
         self.root.deiconify()
         self.root.geometry("310x340+140+140")
         self.root.update_idletasks()
+        expected = self.root.geometry()
         self.app._save_state()
         saved = json.loads(self.state_file.read_text(encoding="utf-8"))
-        self.assertEqual(saved["geometry"], "310x340+140+140")
+        self.assertEqual(saved["geometry"], expected)
+
+    def _usable_test_size(self):
+        return max(310, self.app._minimum_width), max(340, self.app._minimum_height)
 
     def test_geometry_on_connected_secondary_monitor_is_preserved(self):
         monitors = [(0, 0, 1920, 1080), (1920, 0, 3840, 1080)]
+        width, height = self._usable_test_size()
+        geometry = f"{width}x{height}+2000+120"
         with patch.object(self.app, "_screen_rects", return_value=monitors):
-            self.assertEqual(self.app._validated_geometry("310x340+2000+120"),
-                             "310x340+2000+120")
+            self.assertEqual(self.app._validated_geometry(geometry), geometry)
 
     def test_geometry_on_disconnected_monitor_is_rejected(self):
         with patch.object(self.app, "_screen_rects", return_value=[(0, 0, 1920, 1080)]):
             self.assertIsNone(self.app._validated_geometry("290x300+2000+120"))
 
     def test_right_bottom_relative_geometry_remains_supported(self):
-        self.assertEqual(self.app._validated_geometry("310x340-80-80"),
-                         "310x340-80-80")
+        width, height = self._usable_test_size()
+        geometry = f"{width}x{height}-80-80"
+        self.assertEqual(self.app._validated_geometry(geometry), geometry)
 
     def test_nonobject_saved_state_uses_defaults(self):
         for state in ([], None, "settings", 42):
@@ -559,6 +568,140 @@ class PomodoroTests(unittest.TestCase):
         self.assertTrue(app.completed)
         self.assertFalse(app.running)
         self.assertEqual(app.status_label.cget("text"), "Done!")
+
+    def test_work_completion_counts_once_and_waits_for_manual_break_start(self):
+        self.app.remaining = 1
+        self.app.toggle()
+        self.app.tick()
+        self.assertEqual(self.app.sessions.phase, "work")
+        self.assertEqual(self.app.sessions.completed_sessions, 1)
+        self.assertFalse(self.app.running)
+        self.assertEqual(self.app.remaining, 0)
+        self.assertIn("Next: Short break", self.app.phase_label.cget("text"))
+        self.app.toggle()
+        self.assertEqual(self.app.sessions.phase, "short_break")
+        self.assertEqual(self.app.remaining, 300)
+        self.assertTrue(self.app.running)
+
+    def test_break_completion_does_not_count_as_work_and_returns_to_work(self):
+        self.app.sessions.completed_sessions = 1
+        self.app.select_phase("short_break")
+        self.app.remaining = 1
+        self.app.toggle()
+        self.app.tick()
+        self.assertEqual(self.app.sessions.completed_sessions, 1)
+        self.app.next_phase()
+        self.assertEqual(self.app.sessions.phase, "work")
+        self.assertEqual(self.app.remaining, 1500)
+        self.assertFalse(self.app.running)
+
+    def test_fourth_work_session_offers_long_break(self):
+        self.app.sessions.completed_sessions = 3
+        self.app.complete()
+        self.assertEqual(self.app.sessions.completed_sessions, 4)
+        self.app.next_phase()
+        self.assertEqual(self.app.sessions.phase, "long_break")
+        self.assertEqual(self.app.remaining, 900)
+        self.app.complete()
+        self.app.next_phase()
+        self.assertIn("Session 1/4", self.app.phase_label.cget("text"))
+
+    def test_skipping_phase_does_not_increment_session_count(self):
+        self.app.next_phase()
+        self.assertEqual(self.app.sessions.phase, "short_break")
+        self.assertEqual(self.app.sessions.completed_sessions, 0)
+        self.assertFalse(self.app.running)
+
+    def test_phase_change_requires_pause(self):
+        self.app.toggle()
+        remaining = self.app.remaining
+        self.assertFalse(self.app.select_phase("long_break"))
+        self.assertEqual(self.app.sessions.phase, "work")
+        self.assertEqual(self.app.remaining, remaining)
+
+    def test_session_plan_changes_do_not_interrupt_current_timer(self):
+        self.app.toggle()
+        remaining = self.app.remaining
+        self.app.session_vars["work_minutes"].set("45")
+        self.app.session_vars["short_break_minutes"].set("10")
+        self.assertTrue(self.app.apply_session_settings())
+        self.assertEqual(self.app.remaining, remaining)
+        self.assertTrue(self.app.running)
+        self.app.toggle()
+        self.app.next_phase()
+        self.assertEqual(self.app.remaining, 600)
+
+    def test_invalid_session_plan_is_rejected_without_partial_updates(self):
+        original = self.app.sessions.to_state()
+        for invalid in ("0", "bad", "10000"):
+            with self.subTest(invalid=invalid):
+                self.app.session_vars["work_minutes"].set("50")
+                self.app.session_vars["short_break_minutes"].set(invalid)
+                self.assertFalse(self.app.apply_session_settings())
+                self.assertEqual(self.app.sessions.to_state(), original)
+
+    def test_session_state_restores_phase_count_and_paused_remaining_time(self):
+        self.app.sessions.completed_sessions = 3
+        self.app.select_phase("short_break")
+        self.app.sessions.configure(work_minutes=40, long_break_every=3)
+        self.app.remaining = 123
+        self.app._save_state()
+        saved = json.loads(self.state_file.read_text(encoding="utf-8"))
+        app = self._app_from_state(saved)
+        self.assertEqual(app.sessions.phase, "short_break")
+        self.assertEqual(app.sessions.completed_sessions, 3)
+        self.assertEqual(app.sessions.work_minutes, 40)
+        self.assertEqual(app.remaining, 123)
+        self.assertFalse(app.running)
+
+    def test_completed_session_is_not_counted_again_after_reopening(self):
+        self.app.complete()
+        saved = json.loads(self.state_file.read_text(encoding="utf-8"))
+        app = self._app_from_state(saved)
+        app.complete()
+        self.assertEqual(app.sessions.completed_sessions, 1)
+
+    def test_extending_completed_work_does_not_double_count_same_session(self):
+        self.app.complete()
+        self.app.add_time(60)
+        self.assertFalse(self.app.completed)
+        self.app.complete()
+        self.assertEqual(self.app.sessions.completed_sessions, 1)
+
+    def test_repeated_completion_notifies_only_once(self):
+        with patch.object(pomodoro.threading, "Thread") as thread, patch.object(self.app, "flash"):
+            self.app.complete()
+            self.app.complete()
+        self.assertEqual(self.app.sessions.completed_sessions, 1)
+        thread.assert_called_once()
+
+    def test_phase_change_cancels_previous_completion_flash(self):
+        self.app.complete()
+        job = self.app._flash_after
+        self.app.next_phase()
+        self.assertIsNone(self.app._flash_after)
+        self.assertNotIn(job, self.root.tk.call("after", "info"))
+        self.assertEqual(self.app.time_label.cget("bg"), "#1e1e2e")
+
+    def test_reset_session_count_does_not_interrupt_countdown(self):
+        self.app.sessions.completed_sessions = 3
+        self.app.toggle()
+        remaining, job = self.app.remaining, self.app.after_id
+        self.app.reset_session_count()
+        self.assertEqual(self.app.sessions.completed_sessions, 0)
+        self.assertEqual(self.app.remaining, remaining)
+        self.assertEqual(self.app.after_id, job)
+        self.assertTrue(self.app.running)
+
+    def test_malformed_session_state_is_backward_compatible(self):
+        app = self._app_from_state({"total": 1800, "remaining": 123, "session_plan": []})
+        self.assertEqual(app.remaining, 123)
+        self.assertEqual(app.sessions.phase, "work")
+        self.assertEqual(app.sessions.completed_sessions, 0)
+
+    def test_completed_phase_and_sessions_controls_fit(self):
+        self.app.complete()
+        self._assert_controls_fit(self.app)
 
     def test_reset_saved_state_keeps_exact_backup(self):
         original = b'{"geometry":"1x1+120+120", "volume":83}'

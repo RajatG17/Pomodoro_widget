@@ -78,7 +78,8 @@ class PomodoroApp:
         self.pin_btn.config(text="Unpin" if topmost else "Pin")
         self.vol_scale.set(self.volume)
         self.mute_var.set(self.muted)
-        self._apply_alpha()
+        # Do not start faded: give users a chance to find the widget first.
+        self.root.attributes("-alpha", 1.0)
 
         self._update_display()
         if self.completed:
@@ -95,6 +96,9 @@ class PomodoroApp:
 
         # translucency on click
         self.root.bind("<Button-1>", self._on_click)
+        self.root.bind("<FocusIn>", self._on_click, add="+")
+        self.root.bind("<FocusOut>", self._schedule_fade, add="+")
+        self.root.bind("<Map>", self._on_map, add="+")
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # ---------- state persistence ----------
@@ -196,6 +200,7 @@ class PomodoroApp:
             pass
 
     def _on_close(self):
+        self._cancel_fade()
         self._save_state()
         self.root.destroy()
 
@@ -332,20 +337,35 @@ class PomodoroApp:
 
     def _on_click(self, event=None):
         self.root.attributes("-alpha", 1.0)
+        self._schedule_fade()
+
+    def _on_map(self, event):
+        if event.widget is self.root:
+            # Raise without forcing keyboard focus away from another app.
+            self.root.lift()
+            self.root.attributes("-alpha", 1.0)
+            self._schedule_fade(delay=3000)
+
+    def _cancel_fade(self):
         if self._opaque_after:
-            try:
-                self.root.after_cancel(self._opaque_after)
-            except Exception:
-                pass
+            self.root.after_cancel(self._opaque_after)
+            self._opaque_after = None
+
+    def _schedule_fade(self, event=None, delay=2000):
+        self._cancel_fade()
         if bool(self.root.attributes("-topmost")):
-            self._opaque_after = self.root.after(2000, self._revert_alpha)
+            self._opaque_after = self.root.after(delay, self._revert_alpha)
+
+    def _has_focus(self):
+        focused = self.root.focus_displayof()
+        return focused is not None and focused.winfo_toplevel() is self.root
 
     def _revert_alpha(self):
-        if bool(self.root.attributes("-topmost")):
-            self.root.attributes("-alpha", 0.8)
+        self._opaque_after = None
+        self._apply_alpha()
 
     def _apply_alpha(self):
-        if bool(self.root.attributes("-topmost")):
+        if bool(self.root.attributes("-topmost")) and not self._has_focus():
             self.root.attributes("-alpha", 0.8)
         else:
             self.root.attributes("-alpha", 1.0)
@@ -355,7 +375,8 @@ class PomodoroApp:
         self.root.attributes("-topmost", not cur)
         self.pin_btn.config(text="Unpin" if (not cur) else "Pin")
         self.status_label.config(text="On top" if (not cur) else "Not on top")
-        self._apply_alpha()
+        self._cancel_fade()
+        self._on_click()
         self._save_state()
 
     # ---------- logic ----------

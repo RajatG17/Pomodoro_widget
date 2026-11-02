@@ -69,7 +69,12 @@ class ExecutableTests(unittest.TestCase):
         self._check_window({"total": 300, "remaining": 120}, args=["--reset-state"],
                            expected_remaining=1500, expect_backup=True)
 
-    def _check_window(self, state, args=(), expected_remaining=900, expect_backup=False):
+    def test_packaged_startup_is_opaque_when_pinned(self):
+        self._check_window({"total": 1500, "remaining": 900, "topmost": True},
+                           expect_opaque=True)
+
+    def _check_window(self, state, args=(), expected_remaining=900, expect_backup=False,
+                      expect_opaque=False):
         with tempfile.TemporaryDirectory() as directory:
             # A unique binary path identifies only our process, never a user's app.
             executable = Path(directory) / "PomodoroTimer.exe"
@@ -94,6 +99,21 @@ class ExecutableTests(unittest.TestCase):
                     self.fail("Packaged app did not create a visible, usable window within 20s")
                 self.assertGreaterEqual(rect.right - rect.left, 290)
                 self.assertGreaterEqual(rect.bottom - rect.top, 300)
+                if expect_opaque:
+                    user32 = ctypes.windll.user32
+                    user32.GetLayeredWindowAttributes.argtypes = [
+                        wintypes.HWND, ctypes.POINTER(wintypes.DWORD),
+                        ctypes.POINTER(wintypes.BYTE), ctypes.POINTER(wintypes.DWORD),
+                    ]
+                    color, alpha, flags = wintypes.DWORD(), wintypes.BYTE(), wintypes.DWORD()
+                    layered = user32.GetLayeredWindowAttributes(
+                        hwnd, ctypes.byref(color), ctypes.byref(alpha), ctypes.byref(flags))
+                    if layered:
+                        self.assertEqual(alpha.value, 255, "Startup window should be fully opaque")
+                    else:
+                        user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+                        self.assertFalse(user32.GetWindowLongW(hwnd, -20) & 0x80000,
+                                         "Could not read opacity of a layered window")
                 ctypes.windll.user32.PostMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE
                 self.assertEqual(process.wait(timeout=10), 0)
                 saved = json.loads(state_file.read_text(encoding="utf-8"))

@@ -105,6 +105,57 @@ class PomodoroTests(unittest.TestCase):
         self.app._apply_alpha()
         self.assertAlmostEqual(float(self.app.root.attributes("-alpha")), 1.0, places=2)
 
+    def test_startup_is_opaque_even_when_pinned(self):
+        self.assertAlmostEqual(float(self.root.attributes("-alpha")), 1.0, places=2)
+
+    def test_mapping_window_raises_it_and_starts_visibility_grace_period(self):
+        with patch.object(self.root, "lift") as lift:
+            self.root.deiconify()
+            self.root.update()
+        lift.assert_called()
+        self.assertAlmostEqual(float(self.root.attributes("-alpha")), 1.0, places=2)
+        self.assertIsNotNone(self.app._opaque_after)
+
+    def test_opacity_timeout_does_not_fade_focused_window(self):
+        self.app._on_click()
+        with patch.object(self.root, "focus_displayof", return_value=self.app.start_btn):
+            self.app._revert_alpha()
+        self.assertAlmostEqual(float(self.root.attributes("-alpha")), 1.0, places=2)
+
+    def test_opacity_timeout_fades_inactive_pinned_window(self):
+        self.app._on_click()
+        with patch.object(self.root, "focus_displayof", return_value=None):
+            self.app._revert_alpha()
+        self.assertAlmostEqual(float(self.root.attributes("-alpha")), 0.8, places=2)
+
+    def test_clicking_child_widget_makes_window_opaque(self):
+        self.root.deiconify()
+        self.root.update()
+        self.root.attributes("-alpha", 0.8)
+        self.app.time_label.event_generate("<Button-1>")
+        self.assertAlmostEqual(float(self.root.attributes("-alpha")), 1.0, places=2)
+
+    def test_focus_in_makes_window_opaque(self):
+        self.root.attributes("-alpha", 0.8)
+        self.root.event_generate("<FocusIn>")
+        self.assertAlmostEqual(float(self.root.attributes("-alpha")), 1.0, places=2)
+
+    def test_unpin_cancels_pending_fade(self):
+        self.app._on_click()
+        job = self.app._opaque_after
+        self.app.toggle_topmost()
+        self.assertIsNone(self.app._opaque_after)
+        self.assertNotIn(job, self.root.tk.call("after", "info"))
+        self.assertAlmostEqual(float(self.root.attributes("-alpha")), 1.0, places=2)
+
+    def test_focus_out_replaces_pending_fade_timer(self):
+        self.app._on_click()
+        original_job = self.app._opaque_after
+        self.root.event_generate("<FocusOut>")
+        self.assertIsNotNone(self.app._opaque_after)
+        self.assertNotEqual(original_job, self.app._opaque_after)
+        self.assertNotIn(original_job, self.root.tk.call("after", "info"))
+
     def _app_from_state(self, state):
         self.state_file.write_text(json.dumps(state), encoding="utf-8")
         root = tk.Tk()

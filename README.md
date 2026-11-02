@@ -67,7 +67,10 @@ Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" 
 - Extend the running timer: `+1m`, `+5m`, `+10m` (or `+`/`-` keys).
 - Quick presets: 25m / 15m / 5m.
 - Sound + flash when the timer completes (volume slider + mute in the widget).
-- Pinned window is translucent (~80%) and becomes opaque when clicked.
+- The widget opens raised and fully opaque for 3 seconds (without stealing keyboard
+  focus). A pinned, inactive window fades to ~80%; clicking or focusing it makes
+  it opaque. It stays opaque while focused, then fades 2 seconds after focus leaves.
+  Unpinned windows always stay opaque.
 - Remembers last state (duration, remaining time, volume, mute, pin, position) between runs.
 - Music tab with media-key controls (play/pause, next, prev, stop) and Spotify open/launch.
 - Keyboard `+`/`-` adjust by 10 minutes.

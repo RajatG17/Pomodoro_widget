@@ -80,6 +80,9 @@ Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" 
   it opaque. It stays opaque while focused, then fades 2 seconds after focus leaves.
   Unpinned windows always stay opaque.
 - Remembers last state (duration, remaining time, volume, mute, pin, position) between runs.
+- Volume-slider saves are debounced by 250 ms; closing the app flushes pending
+  changes. Settings are written to a temporary sibling file and atomically
+  replaced, so a failed write does not truncate the previous settings.
 - Music tab with media-key controls (play/pause, next, prev, stop) and Spotify open/launch.
 - Keyboard `+`/`-` adjust by 10 minutes.
 

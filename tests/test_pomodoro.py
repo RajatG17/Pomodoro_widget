@@ -137,6 +137,43 @@ class PomodoroTests(unittest.TestCase):
         self.assertTrue(self.app.muted)
         self.assertEqual(self.app.volume, 0)
 
+    def test_volume_drag_is_debounced_and_saves_latest_value_once(self):
+        with patch.object(self.root, "after", return_value="pending-save") as after, \
+                patch.object(self.root, "after_cancel"), \
+                patch.object(self.app, "_save_state", wraps=self.app._save_state) as save:
+            for volume in range(10, 80, 10):
+                self.app._on_volume(volume)
+            save.assert_not_called()
+            callback = after.call_args.args[1]
+            callback()
+            save.assert_called_once()
+        saved = json.loads(self.state_file.read_text(encoding="utf-8"))
+        self.assertEqual(saved["volume"], 70)
+
+    def test_close_flushes_pending_volume_save(self):
+        self.app._on_volume(37)
+        with patch.object(self.root, "destroy"):
+            self.app._on_close()
+        self.assertIsNone(self.app._state_after)
+        self.assertEqual(json.loads(self.state_file.read_text(encoding="utf-8"))["volume"], 37)
+
+    def test_failed_atomic_replace_preserves_original_and_cleans_temp_file(self):
+        original = b'{"volume": 83}'
+        self.state_file.write_bytes(original)
+        with patch.object(pomodoro.os, "replace", side_effect=PermissionError("locked")), \
+                self.assertLogs("pomodoro", level="WARNING"):
+            self.assertFalse(self.app._save_state())
+        self.assertEqual(self.state_file.read_bytes(), original)
+        self.assertEqual(list(self.state_file.parent.iterdir()), [self.state_file])
+
+    def test_serialization_failure_does_not_truncate_settings(self):
+        original = b'{"volume": 83}'
+        self.state_file.write_bytes(original)
+        with patch.object(pomodoro.json, "dumps", side_effect=TypeError("bad state")), \
+                self.assertLogs("pomodoro", level="WARNING"):
+            self.assertFalse(self.app._save_state())
+        self.assertEqual(self.state_file.read_bytes(), original)
+
     def test_tone_bytes_respects_mute(self):
         self.app.muted = True
         self.assertIsNone(self.app._tone_bytes(440, 100))

@@ -16,6 +16,8 @@ from ctypes import wintypes
 import re
 import webbrowser
 import argparse
+import logging
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -71,6 +73,7 @@ class PomodoroApp:
         self.volume = self._state.get("volume", 70)
         self.muted = self._state.get("muted", False)
         self._opaque_after = None
+        self._state_after = None
 
         self._build_ui()
         self.root.update_idletasks()
@@ -233,6 +236,7 @@ class PomodoroApp:
     def _save_state(self):
         if self._initializing:
             return
+        self._cancel_state_save()
         # Before mapping (or while withdrawn), Tk can report a 1x1 window.
         # Preserve the last known good size/position instead of saving that.
         if self.root.winfo_ismapped():
@@ -247,11 +251,41 @@ class PomodoroApp:
             "topmost": bool(self.root.attributes("-topmost")),
             "geometry": self._last_geometry,
         }
+        temporary = None
         try:
-            with open(STATE_FILE, "w", encoding="utf-8") as f:
-                json.dump(data, f)
-        except Exception:
-            pass
+            serialized = json.dumps(data)
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", delete=False,
+                                             dir=Path(STATE_FILE).parent,
+                                             prefix=".pomodoro-", suffix=".tmp") as f:
+                temporary = Path(f.name)
+                f.write(serialized)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporary, STATE_FILE)
+            return True
+        except (OSError, TypeError, ValueError):
+            logging.getLogger(__name__).warning("Could not save Pomodoro settings", exc_info=True)
+            return False
+        finally:
+            if temporary is not None:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError:
+                    logging.getLogger(__name__).warning("Could not remove temporary settings file")
+
+    def _cancel_state_save(self):
+        if self._state_after:
+            self.root.after_cancel(self._state_after)
+            self._state_after = None
+
+    def _queue_state_save(self):
+        if not self._initializing:
+            self._cancel_state_save()
+            self._state_after = self.root.after(250, self._flush_state_save)
+
+    def _flush_state_save(self):
+        self._state_after = None
+        self._save_state()
 
     def _on_close(self):
         self._cancel_fade()
@@ -551,7 +585,7 @@ class PomodoroApp:
         self.volume = int(float(val))
         self.muted = self.volume <= 0
         self.mute_var.set(self.muted)
-        self._save_state()
+        self._queue_state_save()
 
     def _on_mute(self):
         self.muted = bool(self.mute_var.get())

@@ -1,1 +1,7 @@
-# No external dependencies - uses Python standard library (tkinter, winsound).
+# Optional Windows media-session integration (timer/UI still work without it).
+# The standalone executable bundles these packages. Python 3.9-3.14 on Windows.
+winrt-Windows.Media.Control==3.2.1
+winrt-Windows.Foundation==3.2.1
+winrt-Windows.Foundation.Collections==3.2.1
+winrt-Windows.Media==3.2.1
+winrt-Windows.Storage.Streams==3.2.1

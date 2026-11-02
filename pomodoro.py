@@ -14,15 +14,17 @@ import os
 import ctypes
 from ctypes import wintypes
 import re
-import webbrowser
 import argparse
 import logging
 import tempfile
+import time
 from datetime import datetime
 from pathlib import Path
 from windows_integration import GlobalHotkeys, SingleInstance, enable_taskbar, window_is_foreground
 from session_plan import SessionPlan, PHASE_LABELS
 from widget_ui import WidgetUI, COLORS
+from media_controls import MediaService, MediaSnapshot, choose_session, media_diagnostics
+from player_launcher import open_player
 
 STATE_FILE = os.path.join(os.path.expanduser("~"), ".pomodoro_state.json")
 DEFAULT_GEOMETRY = "290x300+120+120"
@@ -86,6 +88,14 @@ class PomodoroApp:
         self._hotkeys = None
         self._desktop_presence = False
         self._taskbar_after = None
+        self._media_enabled = False
+        self._media_service = None
+        self._media_poll_after = None
+        self.media_snapshot = MediaSnapshot()
+        self.media_selection = None
+        self.current_media = None
+        self.media_notice = ""
+        self._media_notice_until = 0
 
         self._build_ui()
         self.root.update_idletasks()
@@ -307,6 +317,7 @@ class PomodoroApp:
         self._save_state()
 
     def _on_close(self):
+        self.stop_media_service()
         self.ui.close()
         self.stop_global_hotkeys()
         self._cancel_tick()
@@ -738,7 +749,92 @@ class PomodoroApp:
         self.time_label.configure(fg=COLORS["accent"] if active else COLORS["text"])
         self._flash_after = self.root.after(180, lambda: self.flash(n + 1))
 
-    # ---------- media / spotify ----------
+    # ---------- Windows media ----------
+    def enable_media(self, enabled=True):
+        self._media_enabled = enabled
+        if not enabled:
+            self.stop_media_service()
+            self._apply_media_snapshot(MediaSnapshot(message="Track detection is disabled; media keys still work."))
+        self.ui.refresh_media()
+
+    def start_media_service(self):
+        if not self._media_enabled or self._media_service is not None:
+            return
+        self._media_service = MediaService()
+        self.media_snapshot = MediaSnapshot(message="Detecting Windows media…")
+        self._media_service.start()
+        self.ui.refresh_media()
+        self._media_poll_after = self.root.after(150, self._poll_media)
+
+    def stop_media_service(self):
+        if self._media_poll_after is not None:
+            self.root.after_cancel(self._media_poll_after)
+            self._media_poll_after = None
+        if self._media_service is not None:
+            self._media_service.close()
+            self._media_service = None
+
+    def _poll_media(self):
+        self._media_poll_after = None
+        if self._media_service is None:
+            return
+        update = self._media_service.get_update()
+        if update is not None:
+            self._apply_media_snapshot(update)
+        if self.media_notice and time.monotonic() >= self._media_notice_until:
+            self.media_notice = ""
+            self.ui.refresh_media()
+        self._media_poll_after = self.root.after(150, self._poll_media)
+
+    def _apply_media_snapshot(self, snapshot):
+        previous = self.current_media.id if self.current_media else None
+        if self.media_selection not in {item.id for item in snapshot.sessions}:
+            self.media_selection = None
+        self.media_snapshot = snapshot
+        self.current_media = choose_session(snapshot, self.media_selection, previous)
+        self.ui.refresh_media()
+
+    def select_media(self, key=None):
+        self.media_selection = key
+        self._apply_media_snapshot(self.media_snapshot)
+
+    def _media_feedback(self, text):
+        self.media_notice = text
+        self._media_notice_until = time.monotonic() + 4
+        self.ui.refresh_media()
+
+    def refresh_media(self):
+        if self._media_service is not None and not self._media_service.thread.is_alive():
+            self.stop_media_service()
+        self.start_media_service()
+        if self._media_service is not None:
+            self._media_service.refresh()
+
+    def media_action(self, action):
+        if self.current_media is not None:
+            if action not in self.current_media.controls:
+                self._media_feedback("This player does not support that action.")
+            elif self._media_service is None or not self._media_service.command(self.current_media.id, action):
+                self._media_feedback("Player is busy; refresh and try again.")
+            else:
+                self.media_notice = ""
+        else:
+            # Legacy apps may handle media keys without publishing a Windows session.
+            key = {"toggle": VK_MEDIA_PLAY_PAUSE, "next": VK_MEDIA_NEXT_TRACK,
+                   "previous": VK_MEDIA_PREV_TRACK, "stop": VK_MEDIA_STOP}[action]
+            self._media_key(key)
+            self._media_feedback("Sent Windows media key to the active player.")
+
+    def open_media_player(self):
+        if self.current_media is None:
+            return
+        try:
+            opened = open_player(self.current_media.source, self.current_media.title)
+        except OSError:
+            opened = False
+        if not opened:
+            self._media_feedback("Cannot reveal this player; use its taskbar icon.")
+
     def _media_key(self, vk):
         try:
             ctypes.windll.user32.keybd_event(vk, 0, 0, 0)
@@ -747,40 +843,16 @@ class PomodoroApp:
             pass
 
     def _media_playpause(self):
-        self._media_key(VK_MEDIA_PLAY_PAUSE)
+        self.media_action("toggle")
 
     def _media_next(self):
-        self._media_key(VK_MEDIA_NEXT_TRACK)
+        self.media_action("next")
 
     def _media_prev(self):
-        self._media_key(VK_MEDIA_PREV_TRACK)
+        self.media_action("previous")
 
     def _media_stop(self):
-        self._media_key(VK_MEDIA_STOP)
-
-    def _open_spotify(self):
-        uri = self.uri_var.get().strip()
-        if not uri:
-            return
-        try:
-            if uri.startswith("spotify:") or uri.startswith("https://open.spotify.com"):
-                os.startfile(uri)
-            else:
-                webbrowser.open(uri)
-        except Exception:
-            try:
-                webbrowser.open(uri)
-            except Exception:
-                pass
-
-    def _launch_spotify(self):
-        try:
-            os.startfile("spotify:")
-        except Exception:
-            try:
-                os.startfile("spotify")
-            except Exception:
-                pass
+        self.media_action("stop")
 
 
 def main(argv=None):
@@ -789,7 +861,15 @@ def main(argv=None):
                         help="Back up saved settings and open with defaults")
     parser.add_argument("--no-global-hotkeys", action="store_true",
                         help="Disable system-wide Ctrl+Alt shortcuts")
+    parser.add_argument("--no-media", action="store_true", help="Disable Windows media-session discovery")
+    parser.add_argument("--media-check", metavar="FILE", help="Write read-only media diagnostics (no track details) and exit")
     args = parser.parse_args(argv)
+    if args.media_check:
+        report = media_diagnostics()
+        Path(args.media_check).write_text(json.dumps(report), encoding="utf-8")
+        if not report["available"]:
+            raise SystemExit(1)
+        return
     try:
         instance = SingleInstance(STATE_FILE)
     except OSError as error:
@@ -808,6 +888,7 @@ def main(argv=None):
         root.withdraw()
         app = PomodoroApp(root)
         app.enable_desktop_presence()
+        app.enable_media(not args.no_media)
         instance.attach(root, app.show_window)
         if not args.no_global_hotkeys:
             app.start_global_hotkeys()
@@ -815,6 +896,7 @@ def main(argv=None):
         root.mainloop()
     finally:
         if app is not None:
+            app.stop_media_service()
             app.stop_global_hotkeys()
         instance.close()
 

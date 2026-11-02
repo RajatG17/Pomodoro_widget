@@ -138,6 +138,8 @@ class InstanceAndTaskbarTests(unittest.TestCase):
                      "Opt in to brief native registration with POMODORO_TEST_HOTKEYS=1")
 class NativeHotkeyTests(unittest.TestCase):
     def test_native_worker_receives_messages_and_releases_registration(self):
+        import gc
+        gc.collect()  # Any prior test Tk interpreter must be finalized on this thread.
         root, action = Mock(), Mock()
         hotkeys = GlobalHotkeys(root, {name: action for _, _, name in HOTKEYS})
         try:

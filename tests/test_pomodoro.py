@@ -1,17 +1,25 @@
 import json
 import ctypes
+import gc
 import tempfile
 import unittest
+import weakref
 import tkinter as tk
 from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch
+from unittest.mock import Mock
+from media_controls import MediaItem, MediaSnapshot
 
 import pomodoro
 
 
 class PomodoroTests(unittest.TestCase):
     def setUp(self):
+        # Reap prior test interpreters on their owning thread before any native
+        # worker can run cyclic GC. Production has one Tk root per process.
+        gc.collect()
+        self.addCleanup(gc.collect)
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.state_file = Path(self.directory.name) / "state.json"
@@ -21,6 +29,9 @@ class PomodoroTests(unittest.TestCase):
         sound_patch = patch.object(pomodoro.PomodoroApp, "_play_sequence")
         sound_patch.start()
         self.addCleanup(sound_patch.stop)
+        thread_patch = patch.object(pomodoro.threading, "Thread")
+        thread_patch.start()
+        self.addCleanup(thread_patch.stop)
         self.root = tk.Tk()
         self.addCleanup(self._destroy_root, self.root)
         self.root.withdraw()
@@ -28,19 +39,33 @@ class PomodoroTests(unittest.TestCase):
 
     @staticmethod
     def _destroy_root(root):
+        try:
+            if not root.winfo_exists():
+                return
+        except tk.TclError:
+            return
         # Cancel pending Tk callbacks before destroying their Tcl commands.
         for job in root.tk.call("after", "info"):
             root.after_cancel(job)
         root.destroy()
+
+    def test_destroy_releases_ui_variables_before_worker_garbage_collection(self):
+        variables = [weakref.ref(variable) for variable in self.app.session_vars.values()]
+        variables.append(weakref.ref(self.app.mute_var))
+        self.root.destroy()
+        self.assertEqual(self.app.session_vars, {})
+        self.assertIsNone(self.app.mute_var)
+        self.assertTrue(all(reference() is None for reference in variables))
 
     def test_fmt_mm_ss(self):
         self.assertEqual(self.app.fmt(0), "00:00")
         self.assertEqual(self.app.fmt(65), "01:05")
         self.assertEqual(self.app.fmt(3600), "1:00:00")
 
-    def test_local_shortcuts_do_not_intercept_spotify_url_typing(self):
+    def test_local_shortcuts_do_not_intercept_text_entry(self):
+        entry = tk.Entry(self.root)
         with patch.object(self.app, "reset") as reset:
-            result = self.app._local_shortcut(SimpleNamespace(widget=self.app.uri_entry, state=0),
+            result = self.app._local_shortcut(SimpleNamespace(widget=entry, state=0),
                                                self.app.reset)
         reset.assert_not_called()
         self.assertIsNone(result)
@@ -423,6 +448,93 @@ class PomodoroTests(unittest.TestCase):
         self.assertEqual(self.app.remaining, remaining)
         self.assertEqual(self.app.after_id, job)
         self.assertTrue(self.app.running)
+
+    def test_music_panel_has_no_spotify_link_input(self):
+        self.assertFalse(hasattr(self.app, "uri_entry"))
+        self.assertFalse(hasattr(self.app, "uri_var"))
+        self.assertEqual(self.app.ui.open_player_button.cget("state"), "disabled")
+
+    def test_media_snapshot_shows_playing_browser_not_paused_spotify(self):
+        browser = MediaItem("browser", "Chrome", "Browser video", "Channel", "Playing", ("toggle", "next"))
+        spotify = MediaItem("spotify", "Spotify.exe", "Paused song", "Artist", "Paused", ("toggle",))
+        self.app._apply_media_snapshot(MediaSnapshot(True, (spotify, browser), "spotify", ""))
+        self.assertEqual(self.app.current_media, browser)
+        self.assertIn("Browser video", self.app.ui.media_title.cget("text"))
+        self.assertIn("Chrome", self.app.ui.media_source.cget("text"))
+        self.assertEqual(self.app.ui.media_buttons["toggle"].cget("text"), "Pause")
+
+    def test_player_selection_targets_exact_session_without_global_media_keys(self):
+        browser = MediaItem("browser", "Chrome", status="Playing", controls=("toggle",))
+        spotify = MediaItem("spotify", "Spotify.exe", status="Paused", controls=("toggle",))
+        self.app._apply_media_snapshot(MediaSnapshot(True, (browser, spotify)))
+        service = self.app._media_service = Mock()
+        self.app.select_media("spotify")
+        with patch.object(self.app, "_media_key") as legacy:
+            self.app._media_playpause()
+        service.command.assert_called_once_with("spotify", "toggle")
+        legacy.assert_not_called()
+
+    def test_unsupported_player_control_never_falls_back_to_another_app(self):
+        item = MediaItem("browser", "Chrome", controls=("toggle",))
+        self.app._apply_media_snapshot(MediaSnapshot(True, (item,)))
+        self.app._media_service = Mock()
+        with patch.object(self.app, "_media_key") as legacy:
+            self.app._media_next()
+        self.app._media_service.command.assert_not_called()
+        legacy.assert_not_called()
+        self.assertEqual(self.app.ui.media_buttons["next"].cget("state"), "disabled")
+
+    def test_closed_player_selection_recovers_without_sending_commands(self):
+        old = MediaItem("old", "Spotify.exe")
+        browser = MediaItem("browser", "msedge.exe", status="Playing")
+        self.app._apply_media_snapshot(MediaSnapshot(True, (old,)))
+        self.app.select_media("old")
+        self.app._apply_media_snapshot(MediaSnapshot(True, (browser,)))
+        self.assertIsNone(self.app.media_selection)
+        self.assertEqual(self.app.current_media, browser)
+
+    def test_no_session_uses_explicit_legacy_media_key_fallback(self):
+        self.app._apply_media_snapshot(MediaSnapshot(True, (), message=""))
+        with patch.object(self.app, "_media_key") as legacy:
+            self.app._media_playpause()
+        legacy.assert_called_once_with(pomodoro.VK_MEDIA_PLAY_PAUSE)
+        self.assertIn("media key", self.app.media_notice)
+        self.assertEqual(self.app.ui.open_player_button.cget("state"), "disabled")
+
+    def test_open_player_reveals_source_app_without_using_track_as_command(self):
+        item = MediaItem("browser", "Chrome", "Track title & arbitrary text")
+        self.app._apply_media_snapshot(MediaSnapshot(True, (item,)))
+        with patch.object(pomodoro, "open_player", return_value=True) as open_app:
+            self.app.open_media_player()
+        open_app.assert_called_once_with("Chrome", "Track title & arbitrary text")
+
+    def test_media_service_starts_lazily_and_stops_with_widget(self):
+        with patch.object(pomodoro, "MediaService") as factory:
+            service = factory.return_value
+            service.get_update.return_value = None
+            self.app.enable_media()
+            factory.assert_not_called()
+            self.root.deiconify()
+            self.root.update()
+            self.app.ui.navigation["Music"].invoke()
+            self.root.update()
+            service.start.assert_called_once()
+            job = self.app._media_poll_after
+            with patch.object(self.root, "destroy"):
+                self.app._on_close()
+            service.close.assert_called_once()
+            self.assertNotIn(job, self.root.tk.call("after", "info"))
+
+    def test_long_now_playing_metadata_fits_and_is_not_saved(self):
+        title = "Private track title " * 100
+        item = MediaItem("browser", "Chrome", title, "Long artist name " * 100, "Playing", ("toggle",))
+        self.app._apply_media_snapshot(MediaSnapshot(True, (item,), message=""))
+        self._assert_controls_fit(self.app)
+        self.assertIn("…", self.app.ui.media_title.cget("text"))
+        self.app._save_state()
+        saved = self.state_file.read_text(encoding="utf-8")
+        self.assertNotIn("Private track title", saved)
+        self.assertNotIn("Chrome", saved)
 
     def test_phase_selection_updates_accent_and_thin_progress(self):
         self.app.select_phase("short_break")

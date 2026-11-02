@@ -3,6 +3,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from session_plan import SETTING_LIMITS
+from media_controls import clean_text
 
 
 COLORS = {
@@ -285,36 +286,105 @@ class WidgetUI:
         self.tip(app.vol_scale, "Completion alarm volume · does not change music volume")
 
     def build_music(self, page):
-        self.label(page, "YOUR SOUNDTRACK", size=8).pack(anchor="w", pady=(self.dp(4), self.dp(3)))
-        self.label(page, "Spotify & Windows media", size=11, color="text").pack(anchor="w")
+        self.label(page, "WINDOWS MEDIA", size=8).pack(anchor="w", pady=(self.dp(4), self.dp(6)))
+        self.media_source = self.label(page, "System media keys", size=8, color="accent", width=1, anchor="w")
+        self.media_source.pack(fill="x")
+        self.media_title = self.label(page, "No media playing", size=12, color="text",
+                                       width=1, height=2, wraplength=self.dp(240), anchor="w", justify="left")
+        self.media_title.configure(font=("Segoe UI", 12, "bold"))
+        self.media_title.pack(fill="x", pady=(self.dp(4), 0))
+        self.media_artist = self.label(page, "Start playback in a browser or app.", size=8, width=1, anchor="w")
+        self.media_artist.pack(fill="x", pady=(0, self.dp(3)))
+        self.tip(self.media_title, lambda: self.app.current_media.title if self.app.current_media else "No Windows media session")
+        self.media_title.bind("<Configure>", lambda event: self.refresh_media())
         player = self.frame(page, surface=True)
-        player.pack(fill="x", pady=self.dp(12))
-        for column, (text, command, tip) in enumerate((
-                ("‹", self.app._media_prev, "Previous track"),
-                ("Play / pause", self.app._media_playpause, "Play / pause active Windows player"),
-                ("›", self.app._media_next, "Next track"),
-                ("■", self.app._media_stop, "Stop media"))):
+        player.pack(fill="x", pady=self.dp(8))
+        self.media_buttons = {}
+        for column, (action, text, command, tip) in enumerate((
+                ("previous", "‹", self.app._media_prev, "Previous track in selected player"),
+                ("toggle", "Play / pause", self.app._media_playpause, "Play / pause selected player"),
+                ("next", "›", self.app._media_next, "Next track in selected player"),
+                ("stop", "■", self.app._media_stop, "Stop selected player"))):
             player.columnconfigure(column, weight=3 if column == 1 else 1)
-            self.button(player, text, command, size=9, padx=4, tip=tip).grid(
-                row=0, column=column, sticky="ew", padx=self.dp(2), pady=self.dp(3))
-        self.label(page, "SPOTIFY LINK OR URI", size=8).pack(anchor="w", pady=(self.dp(4), self.dp(5)))
-        self.app.uri_var = tk.StringVar()
-        self.app.uri_entry = tk.Entry(page, textvariable=self.app.uri_var, width=1,
-                                      bg=COLORS["surface"], fg=COLORS["text"], insertbackground=COLORS["text"],
-                                      selectbackground=COLORS["accent_dim"], bd=0, highlightthickness=1,
-                                      highlightbackground=COLORS["border"], highlightcolor=COLORS["accent"],
-                                      font=("Segoe UI", 9))
-        self.app.uri_entry.pack(fill="x", ipady=self.dp(6))
-        self.app.uri_entry.bind("<Return>", lambda event: self.app._open_spotify())
+            button = self.button(player, text, command, size=9, padx=4, tip=tip)
+            button.grid(row=0, column=column, sticky="ew", padx=self.dp(2), pady=self.dp(3))
+            self.media_buttons[action] = button
         actions = self.frame(page)
-        actions.pack(fill="x", pady=self.dp(8))
-        open_link = self.button(actions, "Open link", self.app._open_spotify, width=9,
-                                tip="Open the pasted Spotify link or URI")
-        open_link.recolor(COLORS["accent"], COLORS["ink"], "#9bedcf")
-        open_link.pack(side="left", fill="x", expand=True, padx=(0, self.dp(5)))
-        self.button(actions, "Launch Spotify", self.app._launch_spotify, width=12).pack(side="left", fill="x", expand=True)
-        self.label(page, "Media keys control the active Windows player.\nSpotify does not need an API login.",
-                   size=8, justify="left").pack(anchor="w", pady=self.dp(6))
+        actions.pack(fill="x", pady=(self.dp(2), self.dp(6)))
+        self.open_player_button = self.button(actions, "Open player", self.app.open_media_player, width=10,
+                                               size=8, tip="Reveal the app or browser owning this media session")
+        self.open_player_button.recolor(COLORS["accent"], COLORS["ink"], "#9bedcf")
+        self.open_player_button.pack(side="left", fill="x", expand=True, padx=(0, self.dp(4)))
+        self.player_picker_button = self.button(actions, "Players ▾", self.show_players, width=7, size=8, padx=3,
+                                                 tip="Follow playing media automatically, or choose a player")
+        self.player_picker_button.pack(side="left", padx=(0, self.dp(4)))
+        self.button(actions, "↻", self.app.refresh_media, width=2, size=11, padx=3, pady=2,
+                    tip="Refresh Windows media sessions").pack(side="left")
+        self.player_menu = tk.Menu(self.root, tearoff=False, bg=COLORS["surface"], fg=COLORS["text"],
+                                   activebackground=COLORS["hover"], activeforeground=COLORS["text"],
+                                   bd=0, font=("Segoe UI", 9))
+        self.media_message = self.label(page, self.app.media_snapshot.message, size=8,
+                                         width=1, height=2, wraplength=self.dp(240), anchor="nw", justify="left")
+        self.media_message.pack(fill="x", pady=self.dp(3))
+        self.refresh_media()
+
+    def show_players(self):
+        self.player_menu.delete(0, "end")
+        prefix = "✓ " if self.app.media_selection is None else ""
+        self.player_menu.add_command(label=prefix + "Follow playing media", command=lambda: self.app.select_media())
+        self.player_menu.add_separator()
+        for item in self.app.media_snapshot.sessions:
+            prefix = "✓ " if item.id == self.app.media_selection else ""
+            label = f"{prefix}{item.player} · {item.status} · {item.title or 'Untitled'}"
+            self.player_menu.add_command(label=clean_text(label, 85),
+                                          command=lambda key=item.id: self.app.select_media(key))
+        try:
+            self.player_menu.tk_popup(self.player_picker_button.winfo_rootx(),
+                                       self.player_picker_button.winfo_rooty() + self.player_picker_button.winfo_height())
+        finally:
+            self.player_menu.grab_release()
+
+    def _media_text(self, label, text, lines=1):
+        text = clean_text(text)
+        width = label.winfo_width()
+        if width < 20:
+            width = self.dp(240)
+        label.configure(wraplength=max(1, width - self.dp(3)))
+        maximum = width * (1.8 if lines == 2 else 0.95)
+        font = label.cget("font")
+        if int(self.root.tk.call("font", "measure", font, text)) <= maximum:
+            return text
+        left, right = 0, len(text)
+        while left < right:
+            middle = (left + right + 1) // 2
+            if int(self.root.tk.call("font", "measure", font, text[:middle] + "…")) <= maximum:
+                left = middle
+            else:
+                right = middle - 1
+        return text[:left].rstrip() + "…"
+
+    def refresh_media(self):
+        app = self.app
+        if app is None:
+            return
+        item = app.current_media
+        source = f"{item.player} · {item.status}" if item else "System media keys"
+        self.media_source.configure(text=self._media_text(self.media_source, source))
+        self.media_title.configure(text=self._media_text(self.media_title, item.title or "Untitled media" if item else "No media playing", 2))
+        self.media_artist.configure(text=self._media_text(self.media_artist, item.artist or "Artist unavailable" if item else "Start playback in a browser or music app."))
+        for action, button in self.media_buttons.items():
+            button.configure(state="normal" if item is None or action in item.controls else "disabled")
+            button.paint()
+        self.media_buttons["toggle"].configure(text="Pause" if item and item.status == "Playing" else "Play" if item else "Play / pause")
+        self.open_player_button.configure(state="normal" if item else "disabled")
+        self.open_player_button.recolor(COLORS["accent"] if item else COLORS["surface"],
+                                         COLORS["ink"] if item else COLORS["muted"], "#9bedcf" if item else COLORS["hover"])
+        self.player_picker_button.configure(state="normal" if app.media_snapshot.sessions else "disabled")
+        self.player_picker_button.paint()
+        message = app.media_notice or app.media_snapshot.message
+        if not message:
+            message = ("Selected player" if app.media_selection else "Following playing media") if item else "No Windows session. Buttons send media keys."
+        self.media_message.configure(text=self._media_text(self.media_message, message, 2))
 
     def build_sessions(self, page):
         app = self.app
@@ -362,6 +432,8 @@ class WidgetUI:
             active = selected == str(self.pages[name])
             button.recolor(COLORS["hover"] if active else COLORS["surface"],
                            COLORS["text"] if active else COLORS["muted"])
+        if selected == str(self.pages["Music"]):
+            self.app.start_media_service()
 
     def refresh(self):
         app = self.app
@@ -389,6 +461,12 @@ class WidgetUI:
 
     def _destroyed(self, event):
         if event.widget is self.root:
+            if self.app is not None:
+                self.app.stop_media_service()
+                # Drop the last application-owned variable references on Tk's
+                # thread, not during a later media/sound worker GC cycle.
+                self.app.session_vars.clear()
+                self.app.mute_var = None
             self.close()
             self.root._pomodoro_work_area = None
             # Release view/controller cycles on the Tk thread. Otherwise a sound

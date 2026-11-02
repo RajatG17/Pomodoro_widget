@@ -17,8 +17,8 @@ A small, always-on-top Pomodoro timer for Windows.
 - Work, short-break, and long-break phases use mint, blue, and lilac accents.
   Completion gently pulses the border/countdown rather than flashing a large panel.
 - On the first launch after this UI upgrade, old window dimensions are compacted
-  once while keeping the saved position, timer, plan, and audio settings. No new
-  runtime dependencies are required.
+  once while keeping the saved position, timer, plan, and audio settings. The UI
+  uses standard tkinter; optional Windows media detection is described below.
 
 ## Run manually
 
@@ -27,8 +27,9 @@ Option 1 - Standalone executable (no Python needed):
 - Double-click `dist\PomodoroTimer.exe`
 - Or from a terminal: `.\dist\PomodoroTimer.exe`
 
-Option 2 - From source (requires Python 3 with tkinter, included with standard Windows Python installs):
+Option 2 - From source (Python 3 with tkinter, included with standard Windows Python installs):
 
+- For track detection and targeted controls: `python -m pip install -r requirements.txt`
 - `python pomodoro.py`
 - Or double-click `run.bat`
 
@@ -107,7 +108,9 @@ Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" 
 - Volume-slider saves are debounced by 250 ms; closing the app flushes pending
   changes. Settings are written to a temporary sibling file and atomically
   replaced, so a failed write does not truncate the previous settings.
-- Music tab with media-key controls (play/pause, next, prev, stop) and Spotify open/launch.
+- Music tab detects Windows media sessions from browsers, Spotify, and other
+  compatible apps; shows the track/artist and provides targeted playback and
+  **Open player** controls. No playlist links or account login are needed.
 - Keyboard `+`/`-` adjust by 10 minutes.
 
 ## Work sessions and breaks
@@ -139,6 +142,48 @@ The default cycle is **25 minutes work → 5 minutes short break**, with a
 | Short break | 5 minutes | 1–120 minutes |
 | Long break | 15 minutes | 1–240 minutes |
 | Sessions per long break | 4 | 1–24 sessions |
+
+## Currently playing media
+
+Open **Music** to detect Windows media sessions. Discovery runs in a background
+thread and starts only when this view is first opened; the timer stays responsive.
+
+<img src="docs/media-preview.png" width="290" alt="Windows media controls showing a browser player, track details, playback controls, and Open player button">
+
+*Panel example with illustrative track metadata.*
+
+- **Play/Pause**, **Previous**, **Next**, and **Stop** control the displayed player.
+  Unsupported actions are disabled rather than sent to a different app.
+- **Players ▾** lets you select a session, or **Follow playing media** automatically.
+  Playing sessions take priority over paused ones. The track, artist, playback
+  state, and source app refresh about once a second.
+- **Open player** reveals/restores the source app or browser window, including
+  hidden tray-player main windows when identifiable. Registered packaged apps can
+  also be launched if their window is unavailable. This does not open a playlist
+  link or intentionally start a second desktop player instance. With multiple
+  browser windows, a title match is preferred; switching browser tabs is not
+  guaranteed. If Windows blocks activation or no window can be identified, use
+  that app's taskbar/tray icon.
+- **↻** refreshes sessions. Closed players disappear automatically. Track data is
+  kept only in memory, never written to timer settings or sent to a server.
+- If an app does not publish a Windows media session, or media support is missing,
+  the panel explicitly switches to **System media keys**. Playback buttons then
+  send normal Windows media keys; metadata and **Open player** are unavailable.
+  Not every legacy app/browser site supports metadata or every control.
+
+Native detection requires **Windows 10 version 1809 or newer** and the optional
+Python/WinRT packages in `requirements.txt` (Python 3.9–3.14). The standalone
+executable bundles these packages, so no Python installation is needed. The timer
+and generic media keys still work without them. Use `--no-media` to disable native
+discovery entirely. Alarm volume/mute controls affect the timer, not your music.
+
+For read-only diagnostics of the packaged media backend (no playback, launch,
+track titles, or settings changes):
+
+```powershell
+.\dist\PomodoroTimer.exe --media-check "$env:TEMP\pomodoro-media-check.json"
+Get-Content "$env:TEMP\pomodoro-media-check.json"
+```
 
 ## Keyboard shortcuts
 
@@ -202,12 +247,17 @@ To rebuild the executable (requires the optional PyInstaller development tool):
 
 ```powershell
 python -m pip install pyinstaller
-python -m PyInstaller --onefile --windowed --name PomodoroTimer --noconfirm pomodoro.py
+python -m pip install -r requirements.txt
+python -m PyInstaller --onefile --windowed --name PomodoroTimer --noconfirm --collect-submodules winrt pomodoro.py
 ```
 
 Tests require Windows, Python with tkinter, and an interactive desktop. Each test
 uses a temporary settings file; tests never read or overwrite your saved timer
 settings. Media playback is not triggered by the tests.
+Unit tests mock players and playback/launch actions. To run the optional native
+discovery test, set `POMODORO_TEST_MEDIA=1`; it reads sessions only and does not
+send controls or launch applications. Packaged smoke tests also verify the
+bundled WinRT backend with the read-only diagnostics command.
 
 ## Notes
 

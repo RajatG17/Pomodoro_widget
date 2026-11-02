@@ -15,6 +15,21 @@ import unittest
 @unittest.skipUnless(os.name == "nt" and os.environ.get("POMODORO_TEST_EXE"),
                      "Set POMODORO_TEST_EXE to the rebuilt executable to test packaging")
 class ExecutableTests(unittest.TestCase):
+    def test_packaged_windows_media_dependencies_and_read_only_diagnostics(self):
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / "PomodoroTimer.exe"
+            shutil.copy2(Path(os.environ["POMODORO_TEST_EXE"]).resolve(), executable)
+            report_path = Path(directory) / "media-check.json"
+            state_file = Path(directory) / ".pomodoro_state.json"
+            state_file.write_bytes(b'{"volume":37}')
+            result = subprocess.run([str(executable), "--media-check", str(report_path)],
+                                    env=dict(os.environ, USERPROFILE=directory), timeout=20)
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertEqual(result.returncode, 0, report)
+            self.assertTrue(report["available"], report)
+            self.assertEqual(set(report), {"available", "session_count", "message"})
+            self.assertEqual(state_file.read_bytes(), b'{"volume":37}')
+
     def _find_window(self, executable):
         user32 = ctypes.windll.user32
         kernel32 = ctypes.windll.kernel32

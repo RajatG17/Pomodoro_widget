@@ -20,6 +20,7 @@ import logging
 import tempfile
 from datetime import datetime
 from pathlib import Path
+from windows_integration import GlobalHotkeys
 
 STATE_FILE = os.path.join(os.path.expanduser("~"), ".pomodoro_state.json")
 DEFAULT_GEOMETRY = "290x300+120+120"
@@ -74,6 +75,7 @@ class PomodoroApp:
         self.muted = self._state.get("muted", False)
         self._opaque_after = None
         self._state_after = None
+        self._hotkeys = None
 
         self._build_ui()
         self.root.update_idletasks()
@@ -94,15 +96,7 @@ class PomodoroApp:
         self.status_label.config(text=("Done!" if self.completed else
                                        "Paused" if self.remaining < self.total else "Ready"))
 
-        # keyboard shortcuts: +/- 10 minutes
-        self.root.bind("<space>", lambda e: self.toggle())
-        self.root.bind("<r>", lambda e: self.reset())
-        self.root.bind("<R>", lambda e: self.reset())
-        self.root.bind("<plus>", lambda e: self.add_time(600))
-        self.root.bind("<KP_Add>", lambda e: self.add_time(600))
-        self.root.bind("<minus>", lambda e: self.add_time(-600))
-        self.root.bind("<KP_Subtract>", lambda e: self.add_time(-600))
-        self.root.bind("<Escape>", self._recover_window)
+        self._bind_local_shortcuts()
 
         # translucency on click
         self.root.bind("<Button-1>", self._on_click)
@@ -288,9 +282,56 @@ class PomodoroApp:
         self._save_state()
 
     def _on_close(self):
+        if self._hotkeys is not None:
+            self._hotkeys.close()
+            self._hotkeys = None
         self._cancel_fade()
         self._save_state()
         self.root.destroy()
+
+    def _bind_local_shortcuts(self):
+        tag = f"PomodoroShortcuts{id(self)}"
+        bindings = {"<space>": self.toggle, "<r>": self.reset, "<R>": self.reset,
+                    "<plus>": lambda: self.add_time(600),
+                    "<KP_Add>": lambda: self.add_time(600),
+                    "<minus>": lambda: self.add_time(-600),
+                    "<KP_Subtract>": lambda: self.add_time(-600),
+                    "<Escape>": self._recover_window}
+        for sequence, action in bindings.items():
+            self.root.bind_class(tag, sequence,
+                                 lambda event, action=action: self._local_shortcut(event, action))
+        # Suppress button Space-release activation after handling its keypress.
+        self.root.bind_class(tag, "<KeyRelease-space>",
+                             lambda event: self._local_shortcut(event, lambda: None))
+
+        def attach(widget):
+            widget.bindtags((tag, *widget.bindtags()))
+            for child in widget.winfo_children():
+                attach(child)
+        attach(self.root)
+
+    def _local_shortcut(self, event, action):
+        if isinstance(event.widget, (tk.Entry, tk.Text, tk.Spinbox, ttk.Entry, ttk.Combobox)):
+            return None
+        if event.state & (0x4 | 0x8 | 0x20000):  # Leave Ctrl/Alt combinations alone.
+            return None
+        action()
+        return "break"
+
+    def start_global_hotkeys(self):
+        self._hotkeys = GlobalHotkeys(self.root, {
+            "toggle": self.toggle, "reset": self.reset,
+            "add": lambda: self.add_time(600), "subtract": lambda: self.add_time(-600),
+            "show": self._recover_window,
+        })
+        try:
+            self._hotkeys.start()
+            if self._hotkeys.failed_keys:
+                self.status_label.config(text="Some global shortcuts are in use")
+                logging.getLogger(__name__).warning("Shortcut conflicts: %s", self._hotkeys.failed_keys)
+        except RuntimeError:
+            self.status_label.config(text="Global shortcuts unavailable")
+            self._hotkeys = None
 
     # ---------- UI ----------
     def _build_ui(self):
@@ -404,8 +445,9 @@ class PomodoroApp:
         tk.Label(openf, text="Open Spotify URI/URL:", fg="#a6adc8",
                 bg="#1e1e2e", font=("Segoe UI", 9)).pack(anchor="w")
         self.uri_var = tk.StringVar()
-        tk.Entry(openf, textvariable=self.uri_var, bg="#45475a", fg="#cdd6f4",
-                insertbackground="#cdd6f4", bd=0, font=("Segoe UI", 9)).pack(fill="x", pady=2)
+        self.uri_entry = tk.Entry(openf, textvariable=self.uri_var, bg="#45475a", fg="#cdd6f4",
+                                  insertbackground="#cdd6f4", bd=0, font=("Segoe UI", 9))
+        self.uri_entry.pack(fill="x", pady=2)
         tk.Button(openf, text="Open in Spotify", command=self._open_spotify,
                  bg="#1db954", fg="#ffffff", bd=0, font=("Segoe UI", 9, "bold")).pack(pady=2)
 
@@ -694,6 +736,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="Always-on-top Pomodoro timer for Windows")
     parser.add_argument("--reset-state", action="store_true",
                         help="Back up saved settings and open with defaults")
+    parser.add_argument("--no-global-hotkeys", action="store_true",
+                        help="Disable system-wide Ctrl+Alt shortcuts")
     args = parser.parse_args(argv)
     if args.reset_state:
         try:
@@ -701,7 +745,9 @@ def main(argv=None):
         except OSError as error:
             parser.exit(1, f"Could not back up settings; nothing was reset: {error}\n")
     root = tk.Tk()
-    PomodoroApp(root)
+    app = PomodoroApp(root)
+    if not args.no_global_hotkeys:
+        app.start_global_hotkeys()
     root.mainloop()
 
 

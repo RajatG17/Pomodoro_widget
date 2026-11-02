@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 import tkinter as tk
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -35,6 +36,35 @@ class PomodoroTests(unittest.TestCase):
         self.assertEqual(self.app.fmt(0), "00:00")
         self.assertEqual(self.app.fmt(65), "01:05")
         self.assertEqual(self.app.fmt(3600), "1:00:00")
+
+    def test_local_shortcuts_do_not_intercept_spotify_url_typing(self):
+        with patch.object(self.app, "reset") as reset:
+            result = self.app._local_shortcut(SimpleNamespace(widget=self.app.uri_entry, state=0),
+                                               self.app.reset)
+        reset.assert_not_called()
+        self.assertIsNone(result)
+
+    def test_local_shortcuts_leave_modified_keys_alone(self):
+        with patch.object(self.app, "toggle") as toggle:
+            self.app._local_shortcut(SimpleNamespace(widget=self.root, state=0x4), self.app.toggle)
+        toggle.assert_not_called()
+
+    def test_space_on_start_button_toggles_only_once(self):
+        self.root.deiconify()
+        self.root.update()
+        self.app.start_btn.focus_force()
+        self.root.update()
+        self.app.start_btn.event_generate("<KeyPress-space>")
+        self.app.start_btn.event_generate("<KeyRelease-space>")
+        self.root.update()
+        self.assertTrue(self.app.running)
+
+    def test_global_shortcut_failure_is_nonfatal_and_visible(self):
+        with patch.object(pomodoro, "GlobalHotkeys") as hotkeys:
+            hotkeys.return_value.start.side_effect = RuntimeError("unavailable")
+            self.app.start_global_hotkeys()
+        self.assertEqual(self.app.status_label.cget("text"), "Global shortcuts unavailable")
+        self.assertIsNone(self.app._hotkeys)
 
     def test_add_time_positive(self):
         self.app.total = 100

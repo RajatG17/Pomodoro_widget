@@ -109,7 +109,7 @@ class ExecutableTests(unittest.TestCase):
             original = json.dumps(state)
             state_file.write_text(original, encoding="utf-8")
             env = dict(os.environ, USERPROFILE=directory)
-            process = subprocess.Popen([str(executable), *args], env=env)
+            process = subprocess.Popen([str(executable), "--no-global-hotkeys", *args], env=env)
             try:
                 deadline = time.monotonic() + 20
                 hwnd = None

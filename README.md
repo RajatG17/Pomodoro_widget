@@ -94,12 +94,38 @@ Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" 
 - `Esc` - Restore the window's default size/position and make it opaque, without
   resetting the timer or audio settings (while the widget has keyboard focus).
 
+Plain shortcuts apply only inside the widget and do not intercept text entry.
+The following global shortcuts work while another application is focused:
+
+| Shortcut | Action |
+| --- | --- |
+| `Ctrl+Alt+Space` | Start/Pause |
+| `Ctrl+Alt+R` | Reset |
+| `Ctrl+Alt+=` / `Ctrl+Alt+Numpad +` | Add 10 minutes |
+| `Ctrl+Alt+-` / `Ctrl+Alt+Numpad -` | Remove 10 minutes |
+| `Ctrl+Alt+P` | Show/reposition the widget |
+
+Global shortcuts are released on exit. If another application owns a shortcut,
+the widget reports the conflict and keeps its remaining controls working.
+To disable global shortcuts, add `--no-global-hotkeys` when launching the Python
+script or executable. Tests mock registration; executable smoke tests use this
+flag so they do not capture your keyboard shortcuts.
+
+An optional native-backend test briefly registers available shortcuts and posts
+an internal Windows message (it does not simulate typing in other applications):
+
+```powershell
+$env:POMODORO_TEST_HOTKEYS = '1'
+python -m unittest tests.test_windows_integration.NativeHotkeyTests -v
+Remove-Item Env:\POMODORO_TEST_HOTKEYS
+```
+
 ## Testing
 
 Run the unit tests:
 
 ```powershell
-python -m unittest tests.test_pomodoro -v
+python -m unittest discover -s tests -v
 ```
 
 Tests require Windows, Python with tkinter, and an interactive desktop. Each test

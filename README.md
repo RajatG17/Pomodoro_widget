@@ -130,6 +130,29 @@ Run the unit tests:
 python -m unittest discover -s tests -v
 ```
 
+Use `python -B -m unittest discover -s tests -v` to avoid creating Python bytecode
+caches during tests. Generated caches and build intermediates are ignored by Git;
+the standalone `dist\PomodoroTimer.exe` is intentionally versioned.
+
+### Clean generated files
+
+```powershell
+python -B tools\clean_generated.py --dry-run
+python -B tools\clean_generated.py
+```
+
+The tool removes only known cache/build files and empty generated directories.
+It preserves `dist`, settings, source, unfamiliar files, and custom build specs;
+it does not follow directory links/junctions. Add `--include-spec` only if you also
+want to remove the generated `PomodoroTimer.spec` (not a customized version).
+
+To rebuild the executable (requires the optional PyInstaller development tool):
+
+```powershell
+python -m pip install pyinstaller
+python -m PyInstaller --onefile --windowed --name PomodoroTimer --noconfirm pomodoro.py
+```
+
 Tests require Windows, Python with tkinter, and an interactive desktop. Each test
 uses a temporary settings file; tests never read or overwrite your saved timer
 settings. Media playback is not triggered by the tests.

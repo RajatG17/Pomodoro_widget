@@ -1,4 +1,5 @@
 build/
-*.spec
+/PomodoroTimer.spec
 __pycache__/
 *.pyc
+*.pyo

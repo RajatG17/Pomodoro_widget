@@ -1,4 +1,9 @@
 @echo off
 cd /d "%~dp0"
-pythonw pomodoro.py
-if errorlevel 1 python pomodoro.py
+where pythonw >nul 2>&1
+if %errorlevel%==0 (
+    start "" pythonw pomodoro.py
+) else (
+    start "" python pomodoro.py
+)
+exit /b 0

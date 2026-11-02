@@ -133,7 +133,8 @@ class PomodoroTests(unittest.TestCase):
         self.assertEqual(saved["geometry"], "310x340+140+140")
 
     def test_malformed_geometry_uses_visible_default(self):
-        for geometry in (None, {}, 42, "garbage", "999999x999999+0+0"):
+        for geometry in (None, {}, 42, "garbage", "999999x999999+0+0",
+                         "9" * 5000 + "x300+0+0"):
             with self.subTest(geometry=geometry):
                 app = self._app_from_state({"geometry": geometry})
                 app.root.deiconify()
@@ -162,6 +163,96 @@ class PomodoroTests(unittest.TestCase):
     def test_right_bottom_relative_geometry_remains_supported(self):
         self.assertEqual(self.app._validated_geometry("290x300-10-10"),
                          "290x300-10-10")
+
+    def test_nonobject_saved_state_uses_defaults(self):
+        for state in ([], None, "settings", 42):
+            with self.subTest(state=state):
+                app = self._app_from_state(state)
+                self.assertEqual(app.total, 1500)
+                self.assertEqual(app.remaining, 1500)
+
+    def test_invalid_saved_field_types_use_defaults(self):
+        app = self._app_from_state({"total": "bad", "remaining": {},
+                                    "volume": "loud", "muted": [], "topmost": {}})
+        app.root.update_idletasks()
+        self.assertEqual(app.total, 1500)
+        self.assertEqual(app.remaining, 1500)
+        self.assertEqual(app.volume, 70)
+        self.assertFalse(app.muted)
+        self.assertTrue(app.root.attributes("-topmost"))
+
+    def test_saved_numeric_values_are_bounded(self):
+        app = self._app_from_state({"total": 300, "remaining": 900, "volume": 999})
+        self.assertEqual(app.remaining, 300)
+        self.assertEqual(app.volume, 100)
+        for total in (-1, 0, True, 10 ** 100):
+            with self.subTest(total=total):
+                app = self._app_from_state({"total": total})
+                self.assertEqual(app.total, 1500)
+
+    def test_geometry_recovery_preserves_valid_settings_after_mapping(self):
+        app = self._app_from_state({"total": 1800, "remaining": 600,
+                                    "volume": 47, "muted": True,
+                                    "geometry": "1x1+120+120"})
+        app.root.deiconify()
+        app.root.update_idletasks()
+        self.assertEqual(app.total, 1800)
+        self.assertEqual(app.remaining, 600)
+        self.assertEqual(app.volume, 47)
+        self.assertTrue(app.muted)
+
+    def test_truncated_settings_are_ignored(self):
+        self.state_file.write_text('{"total":', encoding="utf-8")
+        self.assertEqual(pomodoro.PomodoroApp._load_state(), {})
+
+    def test_invalid_text_encoding_is_ignored(self):
+        self.state_file.write_bytes(b'\xff\xfe{broken}')
+        self.assertEqual(pomodoro.PomodoroApp._load_state(), {})
+
+    def test_completed_saved_timer_is_not_restarted(self):
+        app = self._app_from_state({"total": 300, "remaining": 0})
+        self.assertEqual(app.remaining, 0)
+        self.assertTrue(app.completed)
+        self.assertFalse(app.running)
+        self.assertEqual(app.status_label.cget("text"), "Done!")
+
+    def test_reset_saved_state_keeps_exact_backup(self):
+        original = b'{"geometry":"1x1+120+120", "volume":83}'
+        self.state_file.write_bytes(original)
+        backup = pomodoro.backup_saved_state()
+        self.assertFalse(self.state_file.exists())
+        self.assertEqual(backup.parent, self.state_file.parent)
+        self.assertEqual(backup.read_bytes(), original)
+
+    def test_reset_without_settings_needs_no_backup(self):
+        self.assertIsNone(pomodoro.backup_saved_state())
+
+    def test_backup_failure_keeps_original_settings(self):
+        original = b'{"volume":83}'
+        self.state_file.write_bytes(original)
+        with patch.object(Path, "replace", side_effect=PermissionError("access denied")):
+            with self.assertRaises(PermissionError):
+                pomodoro.backup_saved_state()
+        self.assertEqual(self.state_file.read_bytes(), original)
+
+    def test_reset_flag_backs_up_state_before_starting_app(self):
+        self.state_file.write_text('{"total": 300}', encoding="utf-8")
+        with patch.object(pomodoro.tk, "Tk") as root, \
+                patch.object(pomodoro, "PomodoroApp") as app_class:
+            pomodoro.main(["--reset-state"])
+        self.assertFalse(self.state_file.exists())
+        self.assertEqual(len(list(self.state_file.parent.glob("*.backup-*"))), 1)
+        app_class.assert_called_once_with(root.return_value)
+        root.return_value.mainloop.assert_called_once()
+
+    def test_reset_flag_does_not_start_app_if_backup_fails(self):
+        with patch.object(pomodoro, "backup_saved_state", side_effect=PermissionError("locked")), \
+                patch.object(pomodoro.tk, "Tk") as root, \
+                patch("sys.stderr"):
+            with self.assertRaises(SystemExit) as raised:
+                pomodoro.main(["--reset-state"])
+        self.assertEqual(raised.exception.code, 1)
+        root.assert_not_called()
 
 
 class TestIsolationTests(unittest.TestCase):

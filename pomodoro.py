@@ -15,16 +15,31 @@ import ctypes
 from ctypes import wintypes
 import re
 import webbrowser
+import argparse
+from datetime import datetime
+from pathlib import Path
 
 STATE_FILE = os.path.join(os.path.expanduser("~"), ".pomodoro_state.json")
 DEFAULT_GEOMETRY = "290x300+120+120"
 MIN_WINDOW_WIDTH = 290
 MIN_WINDOW_HEIGHT = 300
+MAX_SAVED_DURATION = 365 * 24 * 60 * 60
 
 VK_MEDIA_PLAY_PAUSE = 0xB3
 VK_MEDIA_NEXT_TRACK = 0xB0
 VK_MEDIA_PREV_TRACK = 0xB1
 VK_MEDIA_STOP = 0xB2
+
+
+def backup_saved_state():
+    """Move settings to a uniquely named sibling backup before a manual reset."""
+    state_file = Path(STATE_FILE)
+    if not state_file.exists():
+        return None
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    backup = state_file.with_name(f"{state_file.name}.backup-{stamp}")
+    state_file.replace(backup)
+    return backup
 
 
 class PomodoroApp:
@@ -43,13 +58,11 @@ class PomodoroApp:
 
         self.total = self._state.get("total", 25 * 60)
         self.remaining = self._state.get("remaining", self.total)
-        if self.remaining <= 0:
-            self.remaining = self.total
         self.running = False
         self.after_id = None
         self.drag_x = 0
         self.drag_y = 0
-        self.completed = False
+        self.completed = self.remaining == 0
         self.volume = self._state.get("volume", 70)
         self.muted = self._state.get("muted", False)
         self._opaque_after = None
@@ -68,6 +81,8 @@ class PomodoroApp:
         self._apply_alpha()
 
         self._update_display()
+        if self.completed:
+            self.status_label.config(text="Done!")
 
         # keyboard shortcuts: +/- 10 minutes
         self.root.bind("<space>", lambda e: self.toggle())
@@ -101,7 +116,7 @@ class PomodoroApp:
         return [(0, 0, self.root.winfo_screenwidth(), self.root.winfo_screenheight())]
 
     def _validated_geometry(self, value):
-        if not isinstance(value, str):
+        if not isinstance(value, str) or len(value) > 100:
             return None
         match = re.fullmatch(r"(\d+)x(\d+)([+-]\d+)([+-]\d+)", value)
         if not match:
@@ -132,10 +147,32 @@ class PomodoroApp:
     @staticmethod
     def _load_state():
         try:
-            with open(STATE_FILE) as f:
-                return json.load(f)
-        except Exception:
+            with open(STATE_FILE, encoding="utf-8") as f:
+                state = json.load(f)
+        except (OSError, ValueError, UnicodeError):
             return {}
+        if not isinstance(state, dict):
+            return {}
+
+        # JSON can be valid while still holding values that break Tk or timer
+        # arithmetic. Repair individual fields without discarding valid ones.
+        total = state.get("total", 1500)
+        if type(total) is not int or not 1 <= total <= MAX_SAVED_DURATION:
+            total = 1500
+        remaining = state.get("remaining", total)
+        if type(remaining) is not int:
+            remaining = total
+        volume = state.get("volume", 70)
+        if type(volume) is not int:
+            volume = 70
+        return {
+            "total": total,
+            "remaining": max(0, min(total, remaining)),
+            "volume": max(0, min(100, volume)),
+            "muted": state.get("muted") if type(state.get("muted")) is bool else False,
+            "topmost": state.get("topmost") if type(state.get("topmost")) is bool else True,
+            "geometry": state.get("geometry"),
+        }
 
     def _save_state(self):
         # Before mapping (or while withdrawn), Tk can report a 1x1 window.
@@ -153,7 +190,7 @@ class PomodoroApp:
             "geometry": self._last_geometry,
         }
         try:
-            with open(STATE_FILE, "w") as f:
+            with open(STATE_FILE, "w", encoding="utf-8") as f:
                 json.dump(data, f)
         except Exception:
             pass
@@ -530,7 +567,16 @@ class PomodoroApp:
                 pass
 
 
-def main():
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Always-on-top Pomodoro timer for Windows")
+    parser.add_argument("--reset-state", action="store_true",
+                        help="Back up saved settings and open with defaults")
+    args = parser.parse_args(argv)
+    if args.reset_state:
+        try:
+            backup_saved_state()
+        except OSError as error:
+            parser.exit(1, f"Could not back up settings; nothing was reset: {error}\n")
     root = tk.Tk()
     PomodoroApp(root)
     root.mainloop()

@@ -102,14 +102,36 @@ could save an invisible `1x1` window, especially after running the old tests.
 The fixed version automatically rejects tiny, malformed, oversized, and off-screen
 window geometry and opens at a visible default position. Valid timer and audio
 settings are kept; hidden windows no longer overwrite the last valid geometry.
+Invalid JSON, non-object settings, and invalid field types no longer prevent
+startup. Invalid fields fall back to defaults; remaining time and volume are
+bounded to valid ranges. Saved durations outside 1 second–1 year use the default
+25 minutes. Timers reopen paused; completed timers remain at zero.
 
 Both the Python source and rebuilt `dist\PomodoroTimer.exe` include this recovery.
+
+### Reset saved settings safely
+
+Close existing copies of the widget first. If you want to reset all preferences
+(including a volume/mute setting left by the old tests), run either:
+
+```powershell
+python pomodoro.py --reset-state
+# Or, without Python:
+.\dist\PomodoroTimer.exe --reset-state
+```
+
+The original settings are moved to a timestamped
+`%USERPROFILE%\.pomodoro_state.json.backup-*` file before opening defaults.
+If the backup fails, resetting stops and the original file is left untouched.
+To restore a backup, close the app and copy that backup to
+`%USERPROFILE%\.pomodoro_state.json`.
 
 ### Packaged executable smoke test
 
 This opt-in test launches a temporary copy of the executable with isolated
-settings, checks that a visible, usable window appears from `1x1` saved geometry,
-then closes it. It does not launch Spotify or change your own settings.
+settings, checks that a visible, usable window appears from `1x1` saved geometry
+or malformed settings, verifies reset backups, then closes it. It does not launch
+Spotify or change your own settings.
 
 ```powershell
 $env:POMODORO_TEST_EXE = (Resolve-Path .\dist\PomodoroTimer.exe).Path

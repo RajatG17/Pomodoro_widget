@@ -56,16 +56,29 @@ class ExecutableTests(unittest.TestCase):
         return found[0] if found else None
 
     def test_packaged_app_recovers_tiny_geometry(self):
+        self._check_window({"geometry": "1x1+120+120", "total": 1500, "remaining": 900})
+
+    def test_packaged_app_recovers_nonobject_state(self):
+        self._check_window([], expected_remaining=1500)
+
+    def test_packaged_app_recovers_invalid_field_types(self):
+        self._check_window({"total": "invalid", "remaining": {}, "volume": [],
+                            "topmost": {}}, expected_remaining=1500)
+
+    def test_packaged_reset_flag_preserves_backup_and_opens_defaults(self):
+        self._check_window({"total": 300, "remaining": 120}, args=["--reset-state"],
+                           expected_remaining=1500, expect_backup=True)
+
+    def _check_window(self, state, args=(), expected_remaining=900, expect_backup=False):
         with tempfile.TemporaryDirectory() as directory:
             # A unique binary path identifies only our process, never a user's app.
             executable = Path(directory) / "PomodoroTimer.exe"
             shutil.copy2(Path(os.environ["POMODORO_TEST_EXE"]).resolve(), executable)
             state_file = Path(directory) / ".pomodoro_state.json"
-            state_file.write_text(json.dumps({"geometry": "1x1+120+120",
-                                              "total": 1500, "remaining": 900}),
-                                  encoding="utf-8")
+            original = json.dumps(state)
+            state_file.write_text(original, encoding="utf-8")
             env = dict(os.environ, USERPROFILE=directory)
-            process = subprocess.Popen([str(executable)], env=env)
+            process = subprocess.Popen([str(executable), *args], env=env)
             try:
                 deadline = time.monotonic() + 20
                 hwnd = None
@@ -85,7 +98,11 @@ class ExecutableTests(unittest.TestCase):
                 self.assertEqual(process.wait(timeout=10), 0)
                 saved = json.loads(state_file.read_text(encoding="utf-8"))
                 self.assertFalse(saved["geometry"].startswith("1x1"))
-                self.assertEqual(saved["remaining"], 900)
+                self.assertEqual(saved["remaining"], expected_remaining)
+                if expect_backup:
+                    backups = list(Path(directory).glob(".pomodoro_state.json.backup-*"))
+                    self.assertEqual(len(backups), 1)
+                    self.assertEqual(backups[0].read_text(encoding="utf-8"), original)
             finally:
                 if process.poll() is None:
                     # Kill only this test's process tree, including the onefile child.

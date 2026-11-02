@@ -66,7 +66,7 @@ Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" 
 - Start / Pause / Reset.
 - Extend the running timer: `+1m`, `+5m`, `+10m` (or `+`/`-` keys).
 - Quick presets: 25m / 15m / 5m.
-- Sound + flash when the timer completes.
+- Sound + flash when the timer completes (volume slider + mute in the widget).
 
 ## Keyboard shortcuts
 

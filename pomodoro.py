@@ -6,6 +6,9 @@ Run with:  python pomodoro.py
 import tkinter as tk
 from tkinter import ttk
 import winsound
+import struct
+import math
+import threading
 
 
 class PomodoroApp:
@@ -14,7 +17,7 @@ class PomodoroApp:
         self.root.title("Pomodoro")
         self.root.overrideredirect(True)          # borderless widget
         self.root.attributes("-topmost", True)    # stay on top of all windows
-        self.root.geometry("290x230+120+120")
+        self.root.geometry("290x260+120+120")
         self.root.configure(bg="#1e1e2e")
         self.root.resizable(False, False)
 
@@ -25,6 +28,8 @@ class PomodoroApp:
         self.drag_x = 0
         self.drag_y = 0
         self.completed = False
+        self.volume = 70   # 0-100
+        self.muted = False
 
         self._build_ui()
         self._update_display()
@@ -106,6 +111,23 @@ class PomodoroApp:
                      bg="#45475a", fg="#cdd6f4", bd=0,
                      font=("Segoe UI", 9), width=4).pack(side="left", padx=2)
 
+        # volume row
+        volf = tk.Frame(self.root, bg="#1e1e2e")
+        volf.pack(pady=2, fill="x", padx=8)
+        tk.Label(volf, text="Vol:", fg="#a6adc8", bg="#1e1e2e",
+                font=("Segoe UI", 9)).pack(side="left")
+        self.vol_scale = tk.Scale(volf, from_=0, to=100, orient="horizontal",
+                                 length=150, bg="#1e1e2e", fg="#cdd6f4",
+                                 troughcolor="#45475a", highlightthickness=0,
+                                 showvalue=False, command=self._on_volume)
+        self.vol_scale.set(self.volume)
+        self.vol_scale.pack(side="left", padx=4)
+        self.mute_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(volf, text="Mute", variable=self.mute_var,
+                      command=self._on_mute, bg="#1e1e2e", fg="#cdd6f4",
+                      selectcolor="#45475a", activebackground="#1e1e2e",
+                      font=("Segoe UI", 9)).pack(side="left")
+
     # ---------- drag ----------
     def start_drag(self, event):
         self.drag_x = event.x
@@ -121,6 +143,53 @@ class PomodoroApp:
         self.root.attributes("-topmost", not cur)
         self.pin_btn.config(text="Unpin" if (not cur) else "Pin")
         self.status_label.config(text="On top" if (not cur) else "Not on top")
+
+    def _on_volume(self, val):
+        self.volume = int(float(val))
+        self.muted = self.volume <= 0
+        self.mute_var.set(self.muted)
+
+    def _on_mute(self):
+        self.muted = bool(self.mute_var.get())
+        if self.muted:
+            self.volume = 0
+            self.vol_scale.set(0)
+        else:
+            if self.volume <= 0:
+                self.volume = 70
+            self.vol_scale.set(self.volume)
+
+    # ---------- sound ----------
+    def _tone_bytes(self, freq, ms):
+        if self.muted or self.volume <= 0:
+            return None
+        sample_rate = 22050
+        n = int(sample_rate * ms / 1000)
+        amp = int(32767 * (self.volume / 100.0))
+        buf = bytearray()
+        for i in range(n):
+            val = int(amp * math.sin(2 * math.pi * freq * i / sample_rate))
+            buf += struct.pack("<h", val)
+        # WAV header
+        data_size = len(buf)
+        header = struct.pack(
+            "<4sI4s4sIHHIIHH4sI",
+            b"RIFF", 36 + data_size, b"WAVE", b"fmt ", 16, 1, 1,
+            sample_rate, sample_rate * 2, 2, 16, b"data", data_size,
+        )
+        return header + bytes(buf)
+
+    def _play_tone(self, freq, ms):
+        data = self._tone_bytes(freq, ms)
+        if data:
+            try:
+                winsound.PlaySound(data, winsound.SND_MEMORY | winsound.SND_SYNC)
+            except Exception:
+                pass
+
+    def _play_sequence(self):
+        for freq, ms in ((880, 200), (660, 200), (880, 300)):
+            self._play_tone(freq, ms)
 
     # ---------- logic ----------
     def fmt(self, secs):
@@ -222,13 +291,7 @@ class PomodoroApp:
     def complete(self):
         self.completed = True
         self.status_label.config(text="Done!")
-        try:
-            winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
-            winsound.Beep(880, 200)
-            winsound.Beep(660, 200)
-            winsound.Beep(880, 300)
-        except Exception:
-            pass
+        threading.Thread(target=self._play_sequence, daemon=True).start()
         self.flash(0)
 
     def flash(self, n):

@@ -21,7 +21,8 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 from windows_integration import GlobalHotkeys, SingleInstance, enable_taskbar, window_is_foreground
-from session_plan import SessionPlan, PHASE_LABELS, SETTING_LIMITS
+from session_plan import SessionPlan, PHASE_LABELS
+from widget_ui import WidgetUI, COLORS
 
 STATE_FILE = os.path.join(os.path.expanduser("~"), ".pomodoro_state.json")
 DEFAULT_GEOMETRY = "290x300+120+120"
@@ -29,6 +30,7 @@ MIN_WINDOW_WIDTH = 290
 MIN_WINDOW_HEIGHT = 300
 MAX_SAVED_DURATION = 365 * 24 * 60 * 60
 INACTIVE_OPACITY = 0.2  # 80% transparent; focused/clicked windows are fully opaque.
+UI_LAYOUT_VERSION = 2
 
 VK_MEDIA_PLAY_PAUSE = 0xB3
 VK_MEDIA_NEXT_TRACK = 0xB0
@@ -61,7 +63,7 @@ class PomodoroApp:
         self._last_geometry = DEFAULT_GEOMETRY
         self.root.geometry(self._last_geometry)
         self.root.minsize(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
-        self.root.configure(bg="#1e1e2e")
+        self.root.configure(bg=COLORS["bg"])
         self.root.resizable(False, False)
 
         self._state = self._load_state()
@@ -93,7 +95,14 @@ class PomodoroApp:
         # apply persisted topmost / geometry
         topmost = self._state.get("topmost", True)
         self.root.attributes("-topmost", topmost)
-        self._set_window_geometry(self._fit_geometry(self._state.get("geometry")))
+        geometry = self._state.get("geometry")
+        if self._state.get("ui_layout_version", 0) < UI_LAYOUT_VERSION:
+            parts = self._geometry_parts(geometry)
+            if parts:
+                # Compact the old fixed layout once, without losing monitor/position.
+                geometry = self._format_geometry(self._minimum_width, self._minimum_height,
+                                                  parts[2], parts[3])
+        self._set_window_geometry(self._fit_geometry(geometry))
         self.pin_btn.config(text="Unpin" if topmost else "Pin")
         self.vol_scale.set(self.volume)
         self.mute_var.set(self.muted)
@@ -234,6 +243,9 @@ class PomodoroApp:
             "muted": state.get("muted") if type(state.get("muted")) is bool else False,
             "topmost": state.get("topmost") if type(state.get("topmost")) is bool else True,
             "geometry": state.get("geometry"),
+            "ui_layout_version": (state.get("ui_layout_version")
+                                  if type(state.get("ui_layout_version")) is int
+                                  and 0 <= state["ui_layout_version"] <= UI_LAYOUT_VERSION else 0),
             "session_plan": SessionPlan.from_state(state.get("session_plan"),
                                                     completed=remaining <= 0).to_state(),
         }
@@ -256,6 +268,7 @@ class PomodoroApp:
             "topmost": bool(self.root.attributes("-topmost")),
             "geometry": self._last_geometry,
             "session_plan": self.sessions.to_state(),
+            "ui_layout_version": UI_LAYOUT_VERSION,
         }
         temporary = None
         try:
@@ -294,6 +307,7 @@ class PomodoroApp:
         self._save_state()
 
     def _on_close(self):
+        self.ui.close()
         self.stop_global_hotkeys()
         self._cancel_tick()
         self._cancel_flash()
@@ -374,7 +388,7 @@ class PomodoroApp:
         attach(self.root)
 
     def _local_shortcut(self, event, action):
-        if isinstance(event.widget, (tk.Entry, tk.Text, tk.Spinbox, ttk.Entry, ttk.Combobox)):
+        if isinstance(event.widget, (tk.Entry, tk.Text, tk.Spinbox, tk.Menu, ttk.Entry, ttk.Combobox)):
             return None
         if event.state & (0x4 | 0x8 | 0x20000):  # Leave Ctrl/Alt combinations alone.
             return None
@@ -401,10 +415,10 @@ class PomodoroApp:
         return f"Completed work sessions: {self.sessions.completed_sessions}"
 
     def _phase_text(self):
-        title = self.sessions.phase_title()
+        title = self.sessions.phase_title().replace("Next session", "Session")
         if self.completed:
-            title = f"{PHASE_LABELS[self.sessions.phase]} done · Next: {PHASE_LABELS[self.sessions.next_phase()]}"
-        return f"{title}\n{self._session_stats()}"
+            title = f"Next: {PHASE_LABELS[self.sessions.next_phase()]}"
+        return title
 
     def select_phase(self, phase):
         if self.running:
@@ -428,196 +442,27 @@ class PomodoroApp:
         try:
             values = {field: int(variable.get()) for field, variable in self.session_vars.items()}
         except ValueError:
-            self.session_settings_status.config(text="Use whole numbers for all plan settings.", fg="#f38ba8")
+            self.session_settings_status.config(text="Use whole numbers for all plan settings.", fg=COLORS["danger"])
             return False
         try:
             self.sessions.configure(**values)
         except ValueError as error:
-            self.session_settings_status.config(text=f"Invalid plan: {error}", fg="#f38ba8")
+            self.session_settings_status.config(text=f"Invalid plan: {error}", fg=COLORS["danger"])
             return False
-        self.session_settings_status.config(text="Saved; applies to future phases.", fg="#a6e3a1")
+        self.session_settings_status.config(text="Saved; applies to future phases.", fg=COLORS["accent"])
         self._update_display()
         self._save_state()
         return True
 
     def reset_session_count(self):
         self.sessions.completed_sessions = 0
-        self.session_settings_status.config(text="Session count reset.", fg="#a6adc8")
+        self.session_settings_status.config(text="Session count reset.", fg=COLORS["muted"])
         self._update_display()
         self._save_state()
 
     # ---------- UI ----------
     def _build_ui(self):
-        # header (draggable)
-        header = tk.Frame(self.root, bg="#313244", cursor="fleur")
-        header.pack(fill="x")
-        title = tk.Label(header, text="Pomodoro", fg="#cdd6f4", bg="#313244",
-                        font=("Segoe UI", 10, "bold"))
-        title.pack(side="left", padx=8, pady=4)
-        close_btn = tk.Button(header, text="X", command=self._on_close,
-                             bg="#313244", fg="#cdd6f4", bd=0,
-                             font=("Segoe UI", 10), activebackground="#f38ba8",
-                             activeforeground="#1e1e2e", width=3)
-        close_btn.pack(side="right")
-        self.pin_btn = tk.Button(header, text="Pin", command=self.toggle_topmost,
-                                bg="#313244", fg="#cdd6f4", bd=0,
-                                font=("Segoe UI", 9), width=5)
-        self.pin_btn.pack(side="right")
-        for w in (header, title):
-            w.bind("<Button-1>", self.start_drag)
-            w.bind("<B1-Motion>", self.do_drag)
-            w.bind("<Button-1>", self._on_click, add="+")
-
-        # tabs
-        self.notebook = ttk.Notebook(self.root)
-        self.notebook.pack(fill="both", expand=True)
-        timer_tab = tk.Frame(self.notebook, bg="#1e1e2e")
-        music_tab = tk.Frame(self.notebook, bg="#1e1e2e")
-        sessions_tab = tk.Frame(self.notebook, bg="#1e1e2e")
-        self.notebook.add(timer_tab, text="Timer")
-        self.notebook.add(music_tab, text="Music")
-        self.notebook.add(sessions_tab, text="Sessions")
-
-        # ---- Timer tab ----
-        self.phase_label = tk.Label(timer_tab, text=self._phase_text(), fg="#89b4fa",
-                                    bg="#1e1e2e", font=("Segoe UI", 9, "bold"), height=2)
-        self.phase_label.pack(pady=(4, 0))
-        phase_controls = tk.Frame(timer_tab, bg="#1e1e2e")
-        phase_controls.pack(pady=2)
-        self.phase_buttons = []
-        for text, phase in (("Work", "work"), ("Short", "short_break"), ("Long", "long_break")):
-            button = tk.Button(phase_controls, text=text, command=lambda phase=phase: self.select_phase(phase),
-                               bg="#45475a", fg="#cdd6f4", bd=0, font=("Segoe UI", 9), width=6)
-            button.pack(side="left", padx=2)
-            self.phase_buttons.append(button)
-        self.next_phase_btn = tk.Button(phase_controls, text="Next phase", command=self.next_phase,
-                                        bg="#45475a", fg="#cdd6f4", bd=0,
-                                        font=("Segoe UI", 9), width=9)
-        self.next_phase_btn.pack(side="left", padx=2)
-        self.time_label = tk.Label(timer_tab, text="25:00", fg="#cdd6f4",
-                                  bg="#1e1e2e", font=("Consolas", 42, "bold"))
-        self.time_label.pack(pady=(10, 2))
-
-        self.status_label = tk.Label(timer_tab, text="Ready", fg="#a6adc8",
-                                    bg="#1e1e2e", font=("Segoe UI", 9))
-        self.status_label.pack()
-
-        self.progress = ttk.Progressbar(timer_tab, length=250, mode="determinate")
-        self.progress.pack(pady=4)
-
-        ctrl = tk.Frame(timer_tab, bg="#1e1e2e")
-        ctrl.pack(pady=4)
-        self.start_btn = tk.Button(ctrl, text="Start", command=self.toggle, width=9,
-                                  bg="#a6e3a1", fg="#1e1e2e",
-                                  font=("Segoe UI", 10, "bold"), bd=0)
-        self.start_btn.pack(side="left", padx=4)
-        tk.Button(ctrl, text="Reset", command=self.reset, width=9,
-                 bg="#fab387", fg="#1e1e2e", font=("Segoe UI", 10, "bold"),
-                 bd=0).pack(side="left", padx=4)
-
-        addf = tk.Frame(timer_tab, bg="#1e1e2e")
-        addf.pack(pady=2)
-        tk.Label(addf, text="Extend:", fg="#a6adc8", bg="#1e1e2e",
-                font=("Segoe UI", 9)).pack(side="left", padx=2)
-        for m in (1, 5, 10):
-            tk.Button(addf, text=f"+{m}m",
-                     command=lambda m=m: self.add_time(m * 60),
-                     bg="#45475a", fg="#cdd6f4", bd=0,
-                     font=("Segoe UI", 9), width=4).pack(side="left", padx=2)
-
-        presf = tk.Frame(timer_tab, bg="#1e1e2e")
-        presf.pack(pady=2)
-        tk.Label(presf, text="Set:", fg="#a6adc8", bg="#1e1e2e",
-                font=("Segoe UI", 9)).pack(side="left", padx=2)
-        for m in (25, 15, 5):
-            tk.Button(presf, text=f"{m}m",
-                     command=lambda m=m: self.set_duration(m * 60),
-                     bg="#45475a", fg="#cdd6f4", bd=0,
-                     font=("Segoe UI", 9), width=4).pack(side="left", padx=2)
-
-        volf = tk.Frame(timer_tab, bg="#1e1e2e")
-        volf.pack(pady=2, fill="x", padx=8)
-        tk.Label(volf, text="Vol:", fg="#a6adc8", bg="#1e1e2e",
-                font=("Segoe UI", 9)).pack(side="left")
-        self.vol_scale = tk.Scale(volf, from_=0, to=100, orient="horizontal",
-                                 length=150, bg="#1e1e2e", fg="#cdd6f4",
-                                 troughcolor="#45475a", highlightthickness=0,
-                                 showvalue=False, command=self._on_volume)
-        self.vol_scale.set(self.volume)
-        self.vol_scale.pack(side="left", padx=4)
-        self.mute_var = tk.BooleanVar(value=self.muted)
-        tk.Checkbutton(volf, text="Mute", variable=self.mute_var,
-                      command=self._on_mute, bg="#1e1e2e", fg="#cdd6f4",
-                      selectcolor="#45475a", activebackground="#1e1e2e",
-                      font=("Segoe UI", 9)).pack(side="left")
-
-        hint = tk.Label(timer_tab, text="Space=play  R=reset  +/-=10m",
-                        fg="#6c7086", bg="#1e1e2e", font=("Segoe UI", 8))
-        hint.pack(pady=(4, 6))
-
-        # ---- Music tab ----
-        tk.Label(music_tab, text="Spotify / Media", fg="#cdd6f4", bg="#1e1e2e",
-                font=("Segoe UI", 11, "bold")).pack(pady=(10, 6))
-
-        mf = tk.Frame(music_tab, bg="#1e1e2e")
-        mf.pack(pady=4)
-        media_controls = (("⏮ Prev", self._media_prev),
-                          ("⏯ Play/Pause", self._media_playpause),
-                          ("⏭ Next", self._media_next),
-                          ("⏹ Stop", self._media_stop))
-        for index, (txt, cmd) in enumerate(media_controls):
-            tk.Button(mf, text=txt, command=cmd, bg="#45475a", fg="#cdd6f4",
-                     bd=0, font=("Segoe UI", 9), width=12).grid(
-                         row=index // 2, column=index % 2, padx=2, pady=2, sticky="ew")
-
-        openf = tk.Frame(music_tab, bg="#1e1e2e")
-        openf.pack(pady=8, fill="x", padx=8)
-        tk.Label(openf, text="Open Spotify URI/URL:", fg="#a6adc8",
-                bg="#1e1e2e", font=("Segoe UI", 9)).pack(anchor="w")
-        self.uri_var = tk.StringVar()
-        self.uri_entry = tk.Entry(openf, textvariable=self.uri_var, bg="#45475a", fg="#cdd6f4",
-                                  insertbackground="#cdd6f4", bd=0, font=("Segoe UI", 9))
-        self.uri_entry.pack(fill="x", pady=2)
-        tk.Button(openf, text="Open in Spotify", command=self._open_spotify,
-                 bg="#1db954", fg="#ffffff", bd=0, font=("Segoe UI", 9, "bold")).pack(pady=2)
-
-        tk.Button(music_tab, text="Launch Spotify app", command=self._launch_spotify,
-                 bg="#45475a", fg="#cdd6f4", bd=0, font=("Segoe UI", 9)).pack(pady=4)
-
-        tk.Label(music_tab, text="Media keys control the active player\n(Spotify or another media app).",
-                fg="#6c7086", bg="#1e1e2e", font=("Segoe UI", 8)).pack(pady=(8, 4))
-
-        # ---- Sessions tab ----
-        tk.Label(sessions_tab, text="Work / break plan", fg="#cdd6f4", bg="#1e1e2e",
-                 font=("Segoe UI", 11, "bold")).pack(pady=(10, 6))
-        settings = tk.Frame(sessions_tab, bg="#1e1e2e")
-        settings.pack(padx=10, pady=4)
-        self.session_vars = {}
-        for row, (field, label) in enumerate((("work_minutes", "Work (min)"),
-                                               ("short_break_minutes", "Short break (min)"),
-                                               ("long_break_minutes", "Long break (min)"),
-                                               ("long_break_every", "Sessions per long break"))):
-            tk.Label(settings, text=label, fg="#a6adc8", bg="#1e1e2e",
-                     font=("Segoe UI", 9)).grid(row=row, column=0, sticky="w", padx=4, pady=3)
-            variable = tk.StringVar(value=str(getattr(self.sessions, field)))
-            self.session_vars[field] = variable
-            minimum, maximum = SETTING_LIMITS[field]
-            tk.Spinbox(settings, from_=minimum, to=maximum, textvariable=variable, width=5,
-                       bg="#45475a", fg="#cdd6f4", insertbackground="#cdd6f4",
-                       font=("Segoe UI", 9)).grid(row=row, column=1, padx=4, pady=3)
-        tk.Button(sessions_tab, text="Save plan", command=self.apply_session_settings,
-                  bg="#a6e3a1", fg="#1e1e2e", bd=0, font=("Segoe UI", 9, "bold")).pack(pady=4)
-        self.session_settings_status = tk.Label(sessions_tab, text="Changes apply to future phases.",
-                                                fg="#a6adc8", bg="#1e1e2e",
-                                                font=("Segoe UI", 9), wraplength=260, height=3)
-        self.session_settings_status.pack(padx=8)
-        self.session_stats_label = tk.Label(sessions_tab, text=self._session_stats(), fg="#cdd6f4",
-                                            bg="#1e1e2e", font=("Segoe UI", 9))
-        self.session_stats_label.pack(pady=4)
-        tk.Button(sessions_tab, text="Reset session count", command=self.reset_session_count,
-                  bg="#45475a", fg="#cdd6f4", bd=0, font=("Segoe UI", 9)).pack(pady=4)
-        tk.Label(sessions_tab, text="Next phase skips without counting.\nEach phase starts only when you press Start.",
-                 fg="#6c7086", bg="#1e1e2e", font=("Segoe UI", 8)).pack(pady=6)
+        self.ui = WidgetUI(self)
 
     # ---------- drag ----------
     def start_drag(self, event):
@@ -635,6 +480,7 @@ class PomodoroApp:
         self.root.update_idletasks()
         self.root.lift()
         self._on_click()
+        self.ui.refresh()
         self._save_state()
         return "break"
 
@@ -687,6 +533,7 @@ class PomodoroApp:
         self.status_label.config(text="On top" if (not cur) else "Not on top")
         self._cancel_fade()
         self._on_click()
+        self.ui.refresh()
         self._save_state()
 
     # ---------- logic ----------
@@ -712,6 +559,7 @@ class PomodoroApp:
             self.progress["value"] = max(0, min(100, pct))
         else:
             self.progress["value"] = 0
+        self.ui.refresh()
 
     def tick(self):
         if not self.running:
@@ -762,8 +610,6 @@ class PomodoroApp:
         self.start_btn.config(text="Start")
         self.status_label.config(text="Ready")
         self._update_display()
-        self.root.configure(bg="#1e1e2e")
-        self.time_label.configure(bg="#1e1e2e")
         self._save_state()
 
     def _cancel_tick(self):
@@ -878,18 +724,18 @@ class PomodoroApp:
         if self._flash_after is not None:
             self.root.after_cancel(self._flash_after)
             self._flash_after = None
-        self.root.configure(bg="#1e1e2e")
-        self.time_label.configure(bg="#1e1e2e")
+        self.root.configure(bg=COLORS["bg"], highlightbackground=COLORS["border"])
+        self.time_label.configure(bg=COLORS["bg"], fg=COLORS["text"])
 
     def flash(self, n):
         self._flash_after = None
         if n >= 8:
-            self.root.configure(bg="#1e1e2e")
-            self.time_label.configure(bg="#1e1e2e")
+            self.root.configure(highlightbackground=COLORS["border"])
+            self.time_label.configure(fg=COLORS["text"])
             return
-        color = "#f38ba8" if n % 2 == 0 else "#1e1e2e"
-        self.root.configure(bg=color)
-        self.time_label.configure(bg=color)
+        active = n % 2 == 0
+        self.root.configure(highlightbackground=COLORS["accent"] if active else COLORS["border"])
+        self.time_label.configure(fg=COLORS["accent"] if active else COLORS["text"])
         self._flash_after = self.root.after(180, lambda: self.flash(n + 1))
 
     # ---------- media / spotify ----------

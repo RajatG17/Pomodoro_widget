@@ -2,6 +2,24 @@
 
 A small, always-on-top Pomodoro timer for Windows.
 
+<img src="docs/widget-preview.png" width="290" alt="Compact dark Pomodoro widget with a large countdown, segmented controls, and mint accents">
+
+## Compact interface
+
+- Graphite surfaces, phase-coloured accents, a large countdown, and a thin progress
+  line. The default layout is about **290×332 pixels at 100% scaling**, versus the
+  previous 402-pixel-tall layout; controls scale with Windows text settings.
+- Segmented **Timer / Music / Sessions** navigation keeps secondary controls out
+  of the timer's way. **Set ▾** contains the 25/15/5-minute presets; **↻** resets
+  the current timer, and **Next** loads the next phase without starting it.
+- Hover for control descriptions and shortcut hints. Tab moves between controls;
+  Enter activates a focused button. Alarm volume and mute sit in the slim footer.
+- Work, short-break, and long-break phases use mint, blue, and lilac accents.
+  Completion gently pulses the border/countdown rather than flashing a large panel.
+- On the first launch after this UI upgrade, old window dimensions are compacted
+  once while keeping the saved position, timer, plan, and audio settings. No new
+  runtime dependencies are required.
+
 ## Run manually
 
 Option 1 - Standalone executable (no Python needed):
@@ -65,8 +83,8 @@ Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" 
 - Borderless, draggable widget.
 - A taskbar/Alt+Tab entry makes the widget easy to find. Launching it again reveals
   the existing timer instead of creating a duplicate or resetting its countdown.
-- Window size fits both tabs at the current display scaling; music controls use
-  two rows so all four buttons remain accessible. Restoring or dragging the widget
+- Window size fits all three views at the current display scaling; music controls
+  share a compact playback strip. Restoring or dragging the widget
   keeps it within a monitor's usable area, clear of the taskbar.
 - Start / Pause / Reset.
 - Work sessions, short breaks, and long breaks with a persistent completed-session
@@ -74,7 +92,7 @@ Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" 
 - Status feedback (such as `Set 5m`, `+10m`, `Paused`, and `Done!`) remains visible
   through countdown refreshes until the next action changes it.
 - Extend the running timer: `+1m`, `+5m`, `+10m` (or `+`/`-` keys).
-- Quick presets: 25m / 15m / 5m.
+- Quick presets: 25m / 15m / 5m in the **Set ▾** menu.
 - Time adjustments preserve elapsed time and clamp at zero remaining / one year
   total. Removing all remaining time completes immediately, even while paused;
   repeated subtraction does not repeat the alert.
@@ -102,15 +120,15 @@ The default cycle is **25 minutes work → 5 minutes short break**, with a
   paused. These buttons load the configured duration, but do not start it.
 - When a timer finishes, it alerts and waits at zero. **Start next** (or `Space` /
   the global Start/Pause shortcut) loads and starts the next work/break phase.
-  **Next phase** loads the next phase but leaves it paused. No phase auto-starts.
+  **Next** loads the next phase but leaves it paused. No phase auto-starts.
 - Only completed work phases increase the count. Breaks and skipped phases do
   not. Extending a just-finished work timer does not count that same session twice.
-- **Reset** restarts the current phase's timer (including any duration adjustment)
+- **↻ Reset** restarts the current phase's timer (including any duration adjustment)
   without erasing the completed-session history. Presets adjust only the current
   timer, not the saved plan. Pause before changing phases.
 - In **Sessions**, edit durations and the long-break interval, then click
   **Save plan**. Changes apply to future phases, not the timer already running.
-  **Reset session count** clears the history/cycle without interrupting a countdown.
+  **Reset count** clears the history/cycle without interrupting a countdown.
 - Phase, count, plan settings, and paused remaining time survive restarts. Old
   settings files retain their existing timer and get the default work/break plan;
   previously finished timers are not retroactively credited as work sessions.

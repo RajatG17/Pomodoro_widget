@@ -350,6 +350,8 @@ class PomodoroTests(unittest.TestCase):
 
     def _assert_controls_fit(self, app):
         def check(widget):
+            if isinstance(widget, (tk.Menu, tk.Toplevel)):
+                return  # Preset menus and lazy tooltips are intentionally hidden.
             children = widget.winfo_children()
             if not children:
                 self.assertTrue(widget.winfo_ismapped(), f"Hidden control: {widget}")
@@ -381,6 +383,100 @@ class PomodoroTests(unittest.TestCase):
     def test_all_controls_fit_at_larger_display_scaling(self):
         app = self._app_from_state({"geometry": "290x300+120+120"}, scaling=2.0)
         self._assert_controls_fit(app)
+
+    def test_default_layout_is_compact_at_standard_display_scaling(self):
+        app = self._app_from_state({}, scaling=96 / 72)
+        self.assertLessEqual(app._minimum_width, 300)
+        self.assertLessEqual(app._minimum_height, 340)
+
+    def test_old_layout_compacts_once_without_losing_position_or_timer(self):
+        app = self._app_from_state({"geometry": "510x600+140+140", "remaining": 123,
+                                    "volume": 47, "muted": True,
+                                    "session_plan": {"phase": "short_break", "completed_sessions": 2}})
+        app.root.deiconify()
+        app.root.update_idletasks()
+        self.assertEqual((app.root.winfo_width(), app.root.winfo_height()),
+                         (app._minimum_width, app._minimum_height))
+        self.assertEqual((app.root.winfo_x(), app.root.winfo_y()), (140, 140))
+        self.assertEqual(app.remaining, 123)
+        self.assertEqual(app.volume, 47)
+        self.assertTrue(app.muted)
+        self.assertEqual(app.sessions.completed_sessions, 2)
+        self.assertEqual(app.sessions.phase, "short_break")
+        app._save_state()
+        saved = json.loads(self.state_file.read_text(encoding="utf-8"))
+        self.assertEqual(saved["ui_layout_version"], pomodoro.UI_LAYOUT_VERSION)
+
+    def test_current_layout_keeps_valid_saved_dimensions(self):
+        app = self._app_from_state({"geometry": "510x600+140+140",
+                                    "ui_layout_version": pomodoro.UI_LAYOUT_VERSION})
+        app.root.deiconify()
+        app.root.update_idletasks()
+        self.assertEqual(app.root.geometry(), "510x600+140+140")
+
+    def test_segmented_navigation_keeps_running_timer_unchanged(self):
+        self.app.toggle()
+        remaining, job = self.app.remaining, self.app.after_id
+        self.app.ui.navigation["Music"].invoke()
+        self.root.update_idletasks()
+        self.assertEqual(self.app.notebook.select(), str(self.app.ui.pages["Music"]))
+        self.assertEqual(self.app.remaining, remaining)
+        self.assertEqual(self.app.after_id, job)
+        self.assertTrue(self.app.running)
+
+    def test_phase_selection_updates_accent_and_thin_progress(self):
+        self.app.select_phase("short_break")
+        self.assertEqual(self.app.start_btn.cget("bg"), pomodoro.COLORS["break"])
+        self.assertEqual(self.app.progress.itemcget(self.app.progress.bar, "fill"), pomodoro.COLORS["break"])
+        self.app.total, self.app.remaining = 100, 25
+        self.app._update_display()
+        self.assertEqual(self.app.progress["value"], 75)
+        self.assertLessEqual(self.app.progress.winfo_reqheight(), self.app.ui.dp(4))
+
+    def test_presets_still_work_from_compact_menu(self):
+        self.app.preset_menu.invoke(1)
+        self.assertEqual(self.app.remaining, 900)
+        self.app.toggle()
+        self.assertEqual(self.app.preset_btn.cget("state"), "disabled")
+
+    def test_preset_menu_keeps_native_keyboard_handling(self):
+        with patch.object(self.app, "reset") as reset:
+            result = self.app._local_shortcut(SimpleNamespace(widget=self.app.preset_menu, state=0), reset)
+        self.assertIsNone(result)
+        reset.assert_not_called()
+
+    def test_modern_button_hover_and_enter_activation(self):
+        self.root.deiconify()
+        self.root.update()
+        button = self.app.start_btn
+        normal = button.cget("bg")
+        button._hover(True)
+        self.assertNotEqual(button.cget("bg"), normal)
+        button._hover(False)
+        self.assertEqual(button.cget("bg"), normal)
+        button.focus_force()
+        self.root.update()
+        button.event_generate("<Return>")
+        self.assertTrue(self.app.running)
+
+    def test_tooltips_are_lazy_and_cancel_pending_callbacks(self):
+        tooltip = next(tip for tip in self.app.ui.tooltips if tip.widget is self.app.start_btn)
+        tooltip.schedule()
+        job = tooltip.job
+        self.assertIsNone(tooltip.window)
+        tooltip.hide()
+        self.assertNotIn(job, self.root.tk.call("after", "info"))
+        self.root.deiconify()
+        self.root.update()
+        tooltip.show()
+        self.assertIsNotNone(tooltip.window)
+        tooltip.hide()
+        self.assertIsNone(tooltip.window)
+
+    def test_session_validation_message_fits_compact_layout(self):
+        self.app.session_vars["short_break_minutes"].set("0")
+        self.assertFalse(self.app.apply_session_settings())
+        self._assert_controls_fit(self.app)
 
     def test_minimum_size_prevents_clipping_after_forced_resize(self):
         self.root.deiconify()
@@ -681,7 +777,7 @@ class PomodoroTests(unittest.TestCase):
         self.app.next_phase()
         self.assertIsNone(self.app._flash_after)
         self.assertNotIn(job, self.root.tk.call("after", "info"))
-        self.assertEqual(self.app.time_label.cget("bg"), "#1e1e2e")
+        self.assertEqual(self.app.time_label.cget("bg"), pomodoro.COLORS["bg"])
 
     def test_reset_session_count_does_not_interrupt_countdown(self):
         self.app.sessions.completed_sessions = 3

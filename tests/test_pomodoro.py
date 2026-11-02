@@ -1,22 +1,32 @@
-import os
+import json
 import tempfile
 import unittest
 import tkinter as tk
+from pathlib import Path
+from unittest.mock import patch
 
 import pomodoro
 
 
 class PomodoroTests(unittest.TestCase):
     def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.state_file = Path(self.directory.name) / "state.json"
+        state_patch = patch.object(pomodoro, "STATE_FILE", str(self.state_file))
+        state_patch.start()
+        self.addCleanup(state_patch.stop)
         self.root = tk.Tk()
+        self.addCleanup(self._destroy_root, self.root)
         self.root.withdraw()
         self.app = pomodoro.PomodoroApp(self.root)
 
-    def tearDown(self):
-        try:
-            self.root.destroy()
-        except Exception:
-            pass
+    @staticmethod
+    def _destroy_root(root):
+        # Cancel pending Tk callbacks before destroying their Tcl commands.
+        for job in root.tk.call("after", "info"):
+            root.after_cancel(job)
+        root.destroy()
 
     def test_fmt_mm_ss(self):
         self.assertEqual(self.app.fmt(0), "00:00")
@@ -54,7 +64,8 @@ class PomodoroTests(unittest.TestCase):
         self.app._on_volume(50)
         self.assertFalse(self.app.muted)
         self.assertEqual(self.app.volume, 50)
-        self.app._on_mute_toggle_via_var(True)
+        self.app.mute_var.set(True)
+        self.app._on_mute()
         self.assertTrue(self.app.muted)
         self.assertEqual(self.app.volume, 0)
 
@@ -68,30 +79,21 @@ class PomodoroTests(unittest.TestCase):
         self.assertGreater(len(data), 44)
 
     def test_persistence_roundtrip(self):
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".json")
-        tmp.close()
-        old = pomodoro.STATE_FILE
-        pomodoro.STATE_FILE = tmp.name
-        try:
-            self.app.total = 1234
-            self.app.remaining = 567
-            self.app.volume = 42
-            self.app.muted = True
-            self.app.vol_scale.set(42)
-            self.app.mute_var.set(True)
-            self.app._save_state()
-            # new app
-            root2 = tk.Tk()
-            root2.withdraw()
-            app2 = pomodoro.PomodoroApp(root2)
-            self.assertEqual(app2.total, 1234)
-            self.assertEqual(app2.remaining, 567)
-            self.assertEqual(app2.volume, 42)
-            self.assertTrue(app2.muted)
-            root2.destroy()
-        finally:
-            pomodoro.STATE_FILE = old
-            os.remove(tmp.name)
+        self.app.total = 1234
+        self.app.remaining = 567
+        self.app.volume = 42
+        self.app.muted = True
+        self.app.vol_scale.set(42)
+        self.app.mute_var.set(True)
+        self.app._save_state()
+        root2 = tk.Tk()
+        self.addCleanup(self._destroy_root, root2)
+        root2.withdraw()
+        app2 = pomodoro.PomodoroApp(root2)
+        self.assertEqual(app2.total, 1234)
+        self.assertEqual(app2.remaining, 567)
+        self.assertEqual(app2.volume, 42)
+        self.assertTrue(app2.muted)
 
     def test_translucent_when_pinned(self):
         self.app.root.attributes("-topmost", True)
@@ -104,12 +106,24 @@ class PomodoroTests(unittest.TestCase):
         self.assertAlmostEqual(float(self.app.root.attributes("-alpha")), 1.0, places=2)
 
 
-# helper to toggle mute via var (mirrors checkbutton)
-PomodoroApp = pomodoro.PomodoroApp
-def _on_mute_toggle_via_var(self, val):
-    self.mute_var.set(val)
-    self._on_mute()
-PomodoroApp._on_mute_toggle_via_var = _on_mute_toggle_via_var
+class TestIsolationTests(unittest.TestCase):
+    def test_state_writing_tests_leave_existing_settings_untouched(self):
+        # A sentinel stands in for user settings; never touch the real file,
+        # even while reproducing the original test-isolation bug.
+        with tempfile.TemporaryDirectory() as directory:
+            state_file = Path(directory) / "user-state.json"
+            original = json.dumps({"total": 2100, "remaining": 900,
+                                   "volume": 83, "geometry": "290x300+120+120"})
+            state_file.write_text(original, encoding="utf-8")
+            suite = unittest.TestSuite(PomodoroTests(name) for name in (
+                "test_add_time_positive", "test_volume_mute",
+                "test_set_duration_when_stopped", "test_persistence_roundtrip",
+            ))
+            result = unittest.TestResult()
+            with patch.object(pomodoro, "STATE_FILE", str(state_file)):
+                suite.run(result)
+            self.assertTrue(result.wasSuccessful(), result.errors + result.failures)
+            self.assertEqual(state_file.read_text(encoding="utf-8"), original)
 
 
 if __name__ == "__main__":

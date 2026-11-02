@@ -86,6 +86,10 @@ Run the unit tests:
 python -m unittest tests.test_pomodoro -v
 ```
 
+Tests require Windows, Python with tkinter, and an interactive desktop. Each test
+uses a temporary settings file; tests never read or overwrite your saved timer
+settings. Media playback is not triggered by the tests.
+
 ## Notes
 
 - The widget is borderless, so it has no taskbar button; use the `X` button in the header to close it.

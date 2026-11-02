@@ -78,6 +78,14 @@ Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" 
 - `R` - Reset
 - `+` / `-` - Add/remove 10 minutes
 
+## Testing
+
+Run the unit tests:
+
+```powershell
+python -m unittest tests.test_pomodoro -v
+```
+
 ## Notes
 
 - The widget is borderless, so it has no taskbar button; use the `X` button in the header to close it.

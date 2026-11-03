@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
   <Package Name="Pomodoro Timer"
            Manufacturer="Rajat Gade"
            Version="0.1.0.0"
@@ -9,6 +10,39 @@
     <MediaTemplate EmbedCab="yes" />
 
     <Property Id="RUNATLOGON" Value="0" Secure="yes" />
+
+    <WixVariable Id="WixUILicenseRtf" Value="$(sys.SOURCEFILEDIR)LICENSE.rtf" />
+
+    <ui:WixUI Id="WixUI_Minimal" />
+
+    <UI Id="PomodoroOptionsUI">
+      <Dialog Id="PomodoroOptionsDlg" Width="370" Height="270" Title="Pomodoro Timer Setup">
+        <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44"
+                 TabSkip="no" Text="WixUI_Bmp_Banner" />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="373" Height="0" />
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="373" Height="0" />
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="200" Height="15"
+                 Transparent="yes" NoPrefix="yes" Text="Installation Options" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="340" Height="15"
+                 Transparent="yes" NoPrefix="yes" Text="Choose how Pomodoro Timer should start." />
+        <Control Id="RunAtLogonCheckBox" Type="CheckBox" X="20" Y="80" Width="330" Height="17"
+                 Property="RUNATLOGON" CheckBoxValue="1"
+                 Text="Start Pomodoro Timer automatically when I log on to Windows" />
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17"
+                 Default="yes" Text="Next" />
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17"
+                 Disabled="yes" Text="Back" />
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17"
+                 Cancel="yes" Text="Cancel" />
+      </Dialog>
+
+      <Publish Dialog="PomodoroOptionsDlg" Control="Next" Event="NewDialog" Value="WelcomeEulaDlg" Order="1" />
+      <Publish Dialog="PomodoroOptionsDlg" Control="Cancel" Event="SpawnDialog" Value="CancelDlg" Order="1" />
+
+      <InstallUISequence>
+        <Show Dialog="PomodoroOptionsDlg" Before="WelcomeEulaDlg" Condition="NOT Installed" />
+      </InstallUISequence>
+    </UI>
 
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="Pomodoro" />

@@ -29,18 +29,14 @@ First public release, seeded from the accumulated feature and fix history.
   next, previous, and stop controls; player selection; and Open player window
   reveal/launch. Legacy apps fall back to Windows media keys.
 - Optional read-only media diagnostics and `--no-media` support.
+- Windows MSI installer (WiX Toolset v7) that installs to
+  `C:\Program Files\Pomodoro`, adds a Start Menu shortcut, offers an optional
+  run-at-logon entry, and generates a standard uninstaller.
 
 ### Changed
 
 - Replaced the Spotify playlist-link/URI entry and launch buttons with generic
   Windows now-playing media controls.
-
-[0.1.0]: https://github.com/RajatG17/Pomodoro_widget/releases/tag/v0.1.0
-
-## [Unreleased]
-
-### Changed
-
 - Switched the Windows installer source from the Inno Setup script
   (`installer\PomodoroTimer.iss`) to a WiX Toolset MSI project
   (`installer\PomodoroTimer.wxs`) and relocated the installer source accordingly.
@@ -53,8 +49,18 @@ First public release, seeded from the accumulated feature and fix history.
   uses a correctly rooted `RegistryValue` with a quoted command path.
 - The MSI builds with the unified `wix build` command, passes `wix msi validate`
   (ICE), and installs `dist\PomodoroTimer.exe` to `C:\Program Files\Pomodoro`.
+- Added a custom WiX UI to the MSI: the setup wizard opens on an **Installation
+  Options** page whose **Start Pomodoro Timer automatically when I log on to
+  Windows** checkbox controls the per-user `RUNATLOGON` entry (cleared by default).
+  The WiX UI extension is now a build dependency
+  (`wix build -ext WixToolset.UI.wixext`).
+- The installer's EULA page now shows the project's MIT license from
+  `installer\LICENSE.rtf` instead of the extension's placeholder text.
 
 ### Fixed
 
 - Rebuilt `dist\PomodoroTimer.exe` from the current source so the packaged app
   includes `--version` and matches the MSI payload.
+
+[0.1.0]: https://github.com/RajatG17/Pomodoro_widget/releases/tag/v0.1.0
+

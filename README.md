@@ -37,6 +37,10 @@ Option 2 - From source (Python 3 with tkinter, included with standard Windows Py
 
 To launch the widget every time you log in to Windows:
 
+> If you use the MSI installer, tick **Start Pomodoro Timer automatically when I
+> log on to Windows** on its Installation Options page instead of using the manual
+> methods below.
+
 ### Method A - Startup folder (recommended, simplest)
 
 1. Press `Win + R`, type `shell:startup`, press Enter. This opens your personal Startup folder.
@@ -271,11 +275,12 @@ The app version starts at `0.1.0` and is defined once in `pomodoro.py`
 ### Build the Windows installer (MSI)
 
 The installer requires the .NET SDK and the [WiX Toolset](https://wixtoolset.org/)
-v7 command-line tool:
+v7 command-line tool, plus its UI extension:
 
 ```powershell
 dotnet tool install --global wix
 wix eula accept wix7
+wix extension add WixToolset.UI.wixext
 ```
 
 Build the executable and MSI from the repository root:
@@ -283,7 +288,7 @@ Build the executable and MSI from the repository root:
 ```powershell
 python -m pip install -r requirements.txt
 python -m PyInstaller --onefile --windowed --name PomodoroTimer --noconfirm --collect-submodules winrt pomodoro.py
-wix build -arch x64 -o Output\PomodoroTimer-Setup-0.1.0.msi installer\PomodoroTimer.wxs
+wix build -arch x64 -ext WixToolset.UI.wixext -o Output\PomodoroTimer-Setup-0.1.0.msi installer\PomodoroTimer.wxs
 ```
 
 The build produces `Output\PomodoroTimer-Setup-0.1.0.msi` and a `.wixpdb` symbols
@@ -298,28 +303,38 @@ msiexec /i Output\PomodoroTimer-Setup-0.1.0.msi
 msiexec /x Output\PomodoroTimer-Setup-0.1.0.msi
 ```
 
-Add `RUNATLOGON=1` to the install command to create the per-user run-at-logon
-entry. It is omitted by default:
+The setup wizard opens on an **Installation Options** page with the checkbox
+**Start Pomodoro Timer automatically when I log on to Windows**. It is cleared by
+default; tick it before continuing to have the installer create the per-user
+autostart entry. The wizard then shows the MIT licence and installs.
+
+For a silent install, set the same option with the `RUNATLOGON` property
+(`1` = enabled, `0` = disabled/omitted):
 
 ```powershell
-msiexec /i Output\PomodoroTimer-Setup-0.1.0.msi RUNATLOGON=1
+msiexec /i Output\PomodoroTimer-Setup-0.1.0.msi /qn RUNATLOGON=1
 ```
 
 The installer:
 
 - Installs the standalone executable to `C:\Program Files\Pomodoro\PomodoroTimer.exe`.
 - Creates a Start Menu shortcut for all users.
-- Optionally creates a per-user run-at-logon entry (registry component gated on
-  the `RUNATLOGON` property, off by default).
+- Shows an Installation Options page that optionally creates a per-user
+  run-at-logon entry (registry component gated on the `RUNATLOGON` property, off
+  by default).
+- Displays the project's MIT license on the EULA page.
 - Generates a standard MSI uninstaller that removes the executable, shortcut,
   folder, and optional autostart entry.
 
 ### Installer behaviour checklist
 
 - `wix msi validate Output\PomodoroTimer-Setup-0.1.0.msi` reports no ICE errors.
+- The setup wizard shows the Installation Options page before the licence, with
+  the run-at-logon checkbox cleared by default.
 - A normal install completes and the widget starts from the Start Menu shortcut.
-- The optional run-at-logon entry is off by default and can be enabled with
-  `RUNATLOGON=1`.
+- Leaving the checkbox cleared writes no autostart entry; ticking it (or passing
+  `RUNATLOGON=1` silently) creates the per-user `Run` registry value.
+- The licence page shows the MIT license text, not a placeholder.
 - The generated uninstaller cleanly removes the executable, shortcut, folder, and
   any enabled autostart entry.
 

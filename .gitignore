@@ -1,6 +1,7 @@
 build/
 /Output/
 *.wixpdb
+/.wix/
 /PomodoroTimer.spec
 __pycache__/
 *.pyc

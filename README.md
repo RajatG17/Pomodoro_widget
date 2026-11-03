@@ -259,6 +259,42 @@ discovery test, set `POMODORO_TEST_MEDIA=1`; it reads sessions only and does not
 send controls or launch applications. Packaged smoke tests also verify the
 bundled WinRT backend with the read-only diagnostics command.
 
+## Packaging
+
+The app version starts at `0.1.0` and is defined once in `pomodoro.py`
+(`APP_VERSION`), then surfaced through the CLI:
+
+```powershell
+.\dist\PomodoroTimer.exe --version
+```
+
+### Build the Windows installer
+
+The Windows installer is built with [Inno Setup](https://jrsoftware.org/isinfo.php):
+
+```powershell
+python -m pip install -r requirements.txt
+python -m PyInstaller --onefile --windowed --name PomodoroTimer --noconfirm --collect-submodules winrt pomodoro.py
+iscc installer\PomodoroTimer.iss
+```
+
+The build produces `Output\PomodoroTimer-Setup-0.1.0.exe`.
+
+The installer:
+
+- Installs the standalone executable to `C:\Program Files\Pomodoro\PomodoroTimer.exe`.
+- Creates a Start Menu shortcut.
+- Adds an optional task to run the widget at log on (unchecked by default).
+- Generates a standard uninstaller that removes the executable, shortcut, and
+  optional autostart entry.
+
+### Installer behaviour checklist
+
+- A normal install completes and the widget starts from the Start Menu shortcut.
+- The optional run-at-login task is unchecked by default and can be enabled.
+- The generated uninstaller cleanly removes the executable, shortcut, and any
+  enabled autostart entry.
+
 ## Notes
 
 - Use the taskbar or Alt+Tab to find the borderless widget; use `X` to close it.
@@ -321,3 +357,7 @@ $env:POMODORO_TEST_EXE = (Resolve-Path .\dist\PomodoroTimer.exe).Path
 python -m unittest tests.test_executable -v
 Remove-Item Env:\POMODORO_TEST_EXE
 ```
+
+## License
+
+Released under the [MIT License](LICENSE). Copyright (c) 2026 Rajat Gade.

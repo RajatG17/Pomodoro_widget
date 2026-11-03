@@ -62,6 +62,12 @@ class PomodoroTests(unittest.TestCase):
         self.assertEqual(self.app.fmt(65), "01:05")
         self.assertEqual(self.app.fmt(3600), "1:00:00")
 
+    def test_version_flag_reports_app_version(self):
+        with self.assertRaises(SystemExit) as context:
+            pomodoro.main(["--version"])
+        self.assertEqual(context.exception.code, 0)
+        self.assertEqual(pomodoro.APP_VERSION, "0.1.0")
+
     def test_local_shortcuts_do_not_intercept_text_entry(self):
         entry = tk.Entry(self.root)
         with patch.object(self.app, "reset") as reset:

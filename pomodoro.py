@@ -33,6 +33,7 @@ MIN_WINDOW_HEIGHT = 300
 MAX_SAVED_DURATION = 365 * 24 * 60 * 60
 INACTIVE_OPACITY = 0.2  # 80% transparent; focused/clicked windows are fully opaque.
 UI_LAYOUT_VERSION = 2
+APP_VERSION = "0.1.0"
 
 VK_MEDIA_PLAY_PAUSE = 0xB3
 VK_MEDIA_NEXT_TRACK = 0xB0
@@ -857,6 +858,8 @@ class PomodoroApp:
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Always-on-top Pomodoro timer for Windows")
+    parser.add_argument("--version", action="version", version=f"PomodoroTimer {APP_VERSION}",
+                        help="Show the installed version and exit")
     parser.add_argument("--reset-state", action="store_true",
                         help="Back up saved settings and open with defaults")
     parser.add_argument("--no-global-hotkeys", action="store_true",

@@ -270,13 +270,13 @@ The app version starts at `0.1.0` and is defined once in `pomodoro.py`
 
 ### Build the Windows installer (MSI)
 
-The Windows installer is built with the [WiX Toolset](https://wixtoolset.org/):
+The Windows installer is built with the [WiX Toolset](https://wixtoolset.org/) (v7):
 
 ```powershell
 python -m pip install -r requirements.txt
 python -m PyInstaller --onefile --windowed --name PomodoroTimer --noconfirm --collect-submodules winrt pomodoro.py
-wix candle installer\PomodoroTimer.wxs -o installer\PomodoroTimer.wixobj
-wix light installer\PomodoroTimer.wixobj -out Output\PomodoroTimer-Setup-0.1.0.msi
+dotnet tool install --global wix
+wix build -arch x64 -o Output\PomodoroTimer-Setup-0.1.0.msi installer\PomodoroTimer.wxs
 ```
 
 The build produces `Output\PomodoroTimer-Setup-0.1.0.msi`.
@@ -285,8 +285,7 @@ The installer:
 
 - Installs the standalone executable to `C:\Program Files\Pomodoro\PomodoroTimer.exe`.
 - Creates a Start Menu shortcut.
-- Adds an optional run-at-logon entry (registry component gated on the `RUNATLOGON`
-  property, off by default).
+- Adds an optional run-at-logon entry (registry component gated on the `RUNATLOGON` property, off by default).
 - Generates a standard MSI uninstaller that removes the executable, shortcut, and
   optional autostart entry.
 

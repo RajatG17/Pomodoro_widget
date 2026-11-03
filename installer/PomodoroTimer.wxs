@@ -1,22 +1,57 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
-  <Package Id="{8C7B6A5D-4E3F-2A1B-9C8D-7E6F5A4B3C2D}" Name="Pomodoro Timer" Version="0.1.0.0" Manufacturer="Rajat Gade" Language="1033" Scope="perMachine">
-    <Directory Id="TARGETDIR" Name="SourceDir">
-      <Directory Id="ProgramFiles64Folder">
-        <Directory Id="INSTALLFOLDER" Name="Pomodoro" />
+  <Package Name="Pomodoro Timer"
+           Manufacturer="Rajat Gade"
+           Version="0.1.0.0"
+           UpgradeCode="{8C7B6A5D-4E3F-2A1B-9C8D-7E6F5A4B3C2D}"
+           Scope="perMachine">
+    <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Property Id="RUNATLOGON" Value="0" Secure="yes" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Pomodoro" />
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ApplicationProgramsFolder" Name="Pomodoro Timer">
+        <Component Id="PomodoroShortcutComponent" Guid="{8A9B7C6D-4E5F-3A2B-9C8D-7E6F5A4B3C2D}">
+          <Shortcut Id="PomodoroShortcut"
+                    Name="Pomodoro Timer"
+                    Target="[INSTALLFOLDER]PomodoroTimer.exe"
+                    WorkingDirectory="INSTALLFOLDER" />
+          <RemoveFolder Id="RemoveApplicationProgramsFolder" On="uninstall" />
+          <RegistryValue Root="HKCU"
+                         Key="Software\Rajat Gade\Pomodoro Timer"
+                         Name="StartMenuShortcut"
+                         Type="integer"
+                         Value="1"
+                         KeyPath="yes" />
+        </Component>
       </Directory>
-    </Directory>
-    <Component Id="PomodoroExeComponent" Guid="{9B8A7C6D-5E4F-3A2B-8C1D-7E6F5A4B3C2D}">
-      <File Id="PomodoroExeFile" Source="..\dist\PomodoroTimer.exe" KeyPath="yes" />
+    </StandardDirectory>
+
+    <Component Id="PomodoroExeComponent" Guid="{9B8A7C6D-5E4F-3A2B-8C1D-7E6F5A4B3C2D}"
+               Directory="INSTALLFOLDER">
+      <File Id="PomodoroExeFile" Source="$(sys.SOURCEFILEDIR)..\dist\PomodoroTimer.exe" KeyPath="yes" />
     </Component>
-    <Component Id="PomodoroShortcutComponent" Guid="{8A9B7C6D-4E5F-3A2B-9C8D-7E6F5A4B3C2D}">
-      <Shortcut Id="PomodoroShortcut" FileKey="PomodoroExeFile" Name="Pomodoro Timer" Target="FileKey" WorkingDirectory="INSTALLFOLDER" />
+
+    <Component Id="PomodoroRunKeyComponent" Guid="{7C8D9E0F-5A6B-4C7D-8E9F-0A1B2C3D4E5F}"
+               Directory="INSTALLFOLDER"
+               Condition="RUNATLOGON = 1">
+      <RegistryValue Root="HKCU"
+                     Key="Software\Microsoft\Windows\CurrentVersion\Run"
+                     Name="PomodoroTimer"
+                     Type="string"
+                     Value="&quot;[INSTALLFOLDER]PomodoroTimer.exe&quot;"
+                     KeyPath="yes" />
     </Component>
-    <Property Id="RUNATLOGON" Value="0" />
-    <Component Id="PomodoroRunKeyComponent" Guid="{7C8D9E0F-5A6B-4C7D-8E9F-0A1B2C3D4E5F}" Condition="RUNATLOGON = &quot;1&quot;">
-      <RegistryKey Key="Software\Microsoft\Windows\CurrentVersion\Run">
-        <RegistryValue Name="PomodoroTimer" Type="string" Value="&quot;C:\Program Files\Pomodoro\PomodoroTimer.exe&quot;" Root="HKCU" KeyPath="yes" />
-      </RegistryKey>
-    </Component>
+
+    <Feature Id="MainFeature" Title="Pomodoro Timer" Level="1">
+      <ComponentRef Id="PomodoroExeComponent" />
+      <ComponentRef Id="PomodoroShortcutComponent" />
+      <ComponentRef Id="PomodoroRunKeyComponent" />
+    </Feature>
   </Package>
 </Wix>

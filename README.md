@@ -270,31 +270,58 @@ The app version starts at `0.1.0` and is defined once in `pomodoro.py`
 
 ### Build the Windows installer (MSI)
 
-The Windows installer is built with the [WiX Toolset](https://wixtoolset.org/) (v7):
+The installer requires the .NET SDK and the [WiX Toolset](https://wixtoolset.org/)
+v7 command-line tool:
+
+```powershell
+dotnet tool install --global wix
+wix eula accept wix7
+```
+
+Build the executable and MSI from the repository root:
 
 ```powershell
 python -m pip install -r requirements.txt
 python -m PyInstaller --onefile --windowed --name PomodoroTimer --noconfirm --collect-submodules winrt pomodoro.py
-dotnet tool install --global wix
 wix build -arch x64 -o Output\PomodoroTimer-Setup-0.1.0.msi installer\PomodoroTimer.wxs
 ```
 
-The build produces `Output\PomodoroTimer-Setup-0.1.0.msi`.
+The build produces `Output\PomodoroTimer-Setup-0.1.0.msi` and a `.wixpdb` symbols
+file. The MSI is per-machine and installs the executable to
+`C:\Program Files\Pomodoro\PomodoroTimer.exe`.
+
+Install and uninstall it with Windows Installer (the per-machine install prompts
+for elevation):
+
+```powershell
+msiexec /i Output\PomodoroTimer-Setup-0.1.0.msi
+msiexec /x Output\PomodoroTimer-Setup-0.1.0.msi
+```
+
+Add `RUNATLOGON=1` to the install command to create the per-user run-at-logon
+entry. It is omitted by default:
+
+```powershell
+msiexec /i Output\PomodoroTimer-Setup-0.1.0.msi RUNATLOGON=1
+```
 
 The installer:
 
 - Installs the standalone executable to `C:\Program Files\Pomodoro\PomodoroTimer.exe`.
-- Creates a Start Menu shortcut.
-- Adds an optional run-at-logon entry (registry component gated on the `RUNATLOGON` property, off by default).
-- Generates a standard MSI uninstaller that removes the executable, shortcut, and
-  optional autostart entry.
+- Creates a Start Menu shortcut for all users.
+- Optionally creates a per-user run-at-logon entry (registry component gated on
+  the `RUNATLOGON` property, off by default).
+- Generates a standard MSI uninstaller that removes the executable, shortcut,
+  folder, and optional autostart entry.
 
 ### Installer behaviour checklist
 
+- `wix msi validate Output\PomodoroTimer-Setup-0.1.0.msi` reports no ICE errors.
 - A normal install completes and the widget starts from the Start Menu shortcut.
-- The optional run-at-logon entry is off by default and can be enabled.
-- The generated uninstaller cleanly removes the executable, shortcut, and any
-  enabled autostart entry.
+- The optional run-at-logon entry is off by default and can be enabled with
+  `RUNATLOGON=1`.
+- The generated uninstaller cleanly removes the executable, shortcut, folder, and
+  any enabled autostart entry.
 
 ## Notes
 

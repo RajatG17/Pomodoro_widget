@@ -45,7 +45,11 @@ First public release, seeded from the accumulated feature and fix history.
   (`installer\PomodoroTimer.iss`) to a WiX Toolset MSI project
   (`installer\PomodoroTimer.wxs`) and relocated the installer source accordingly.
   The installer now builds `Output\PomodoroTimer-Setup-0.1.0.msi`.
-- Rewrote the WiX installer source for WiX Toolset v7 (v4 schema namespace,
-  `Package` root element, `Condition` attribute, `RegistryKey`/`RegistryValue`
-  elements) and switched the build from `wix candle`/`wix light` to the unified
-  `wix build` command.
+- Rewrote the WiX installer source for WiX Toolset v7 and fixed its schema errors:
+  `Package` now uses `Name`/`Manufacturer`/`Version`/`UpgradeCode`/`Scope` with an
+  auto-generated product code, standard folders use `StandardDirectory`, components
+  live under their destination directories, the Start Menu shortcut has its own
+  component with an HKCU keypath and `RemoveFolder`, and the run-at-logon entry
+  uses a correctly rooted `RegistryValue` with a quoted command path.
+- The MSI builds with the unified `wix build` command, passes `wix msi validate`
+  (ICE), and installs `dist\PomodoroTimer.exe` to `C:\Program Files\Pomodoro`.

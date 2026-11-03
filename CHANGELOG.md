@@ -53,3 +53,8 @@ First public release, seeded from the accumulated feature and fix history.
   uses a correctly rooted `RegistryValue` with a quoted command path.
 - The MSI builds with the unified `wix build` command, passes `wix msi validate`
   (ICE), and installs `dist\PomodoroTimer.exe` to `C:\Program Files\Pomodoro`.
+
+### Fixed
+
+- Rebuilt `dist\PomodoroTimer.exe` from the current source so the packaged app
+  includes `--version` and matches the MSI payload.

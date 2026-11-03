@@ -36,3 +36,12 @@ First public release, seeded from the accumulated feature and fix history.
   Windows now-playing media controls.
 
 [0.1.0]: https://github.com/RajatG17/Pomodoro_widget/releases/tag/v0.1.0
+
+## [Unreleased]
+
+### Changed
+
+- Switched the Windows installer source from the Inno Setup script
+  (`installer\PomodoroTimer.iss`) to a WiX Toolset MSI project
+  (`installer\PomodoroTimer.wxs`) and relocated the installer source accordingly.
+  The installer now builds `Output\PomodoroTimer-Setup-0.1.0.msi`.

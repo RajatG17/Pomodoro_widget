@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/WiX">
+  <Package Id="{8C7B6A5D-4E3F-2A1B-9C8D-7E6F5A4B3C2D}"
+           Version="0.1.0.0"
+           Manufacturer="Rajat Gade"
+           Language="1033"
+           ProcessorArchitecture="x64"
+           InstallerType="msi"
+           Summary="Always-on-top Pomodoro timer with Windows media playback controls."
+           Description="Always-on-top Pomodoro timer with Windows media playback controls." />
+  <Directory Id="TARGETDIR" Name="SourceDir">
+    <Directory Id="ProgramFilesFolder">
+      <Directory Id="INSTALLFOLDER" Name="Pomodoro" />
+    </Directory>
+  </Directory>
+  <Component Id="PomodoroExeComponent" Guid="{9B8A7C6D-5E4F-3A2B-8C1D-7E6F5A4B3C2D}">
+    <File Id="PomodoroExeFile" Source="..\dist\PomodoroTimer.exe" KeyPath="yes" />
+  </Component>
+  <Component Id="PomodoroShortcutComponent" Guid="{8A9B7C6D-4E5F-3A2B-9C8D-7E6F5A4B3C2D}">
+    <Shortcut Id="PomodoroShortcut" FileKey="PomodoroExeFile" Name="Pomodoro Timer"
+              Target="FileKey" WorkingDirectory="INSTALLFOLDER" />
+  </Component>
+  <Property Id="RUNATLOGON" Value="0" />
+  <Component Id="PomodoroRunKeyComponent" Guid="{7C8D9E0F-5A6B-4C7D-8E9F-0A1B2C3D4E5F}">
+    <Condition>RUNATLOGON = "1"</Condition>
+    <Registry Key="Software\Microsoft\Windows\CurrentVersion\Run" Name="PomodoroTimer"
+              Value="&quot;C:\Program Files\Pomodoro\PomodoroTimer.exe&quot;"
+              Type="string" Root="HKCU" />
+  </Component>
+</Wix>
